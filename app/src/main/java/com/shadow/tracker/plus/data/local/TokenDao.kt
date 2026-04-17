@@ -11,6 +11,12 @@ interface TokenDao {
     @Query("SELECT * FROM tokens")
     fun getAllTokens(): Flow<List<TokenEntity>>
 
+    @Query("SELECT * FROM tokens WHERE mintAddress = :mintAddress LIMIT 1")
+    suspend fun getToken(mintAddress: String): TokenEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertToken(token: TokenEntity)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTokens(tokens: List<TokenEntity>)
 }

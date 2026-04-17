@@ -1,15 +1,16 @@
 package com.shadow.tracker.plus.data.remote
 
-import retrofit2.http.GET
-import retrofit2.http.Path
+import com.shadow.tracker.plus.data.remote.model.HeliusAssetResponse
+import retrofit2.http.Body
+import retrofit2.http.POST
 import retrofit2.http.Query
 
+// Helius DAS API (Digital Asset Standard)
 interface HeliusApi {
     
-    // Platzhalter für Helius API (RPC / Yellowstone / Asset Data)
-    @GET("v0/tokens/{mint}")
-    suspend fun getTokenMetadata(
-        @Path("mint") mintAddress: String,
-        @Query("api-key") apiKey: String
-    ): Any // To be implemented
+    @POST("v1/assets")
+    suspend fun searchAssets(
+        @Query("api-key") apiKey: String,
+        @Body request: Map<String, Any>
+    ): HeliusAssetResponse
 }
