@@ -28,9 +28,14 @@ data class CryptoRankPriceResponse(
 
 data class CryptoRankPriceData(
     @SerializedName("price") val price: Double?,
-    @SerializedName("atlPrice") val atlPrice: CryptoRankAtlData?
+    @SerializedName("atlPrice") val atlPrice: CryptoRankAtlData?,
+    @SerializedName("athPrice") val athPrice: CryptoRankAthData?
 )
 
 data class CryptoRankAtlData(
+    @SerializedName("USD") val usd: Double?
+)
+
+data class CryptoRankAthData(
     @SerializedName("USD") val usd: Double?
 )

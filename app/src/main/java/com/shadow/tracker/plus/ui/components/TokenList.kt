@@ -15,10 +15,14 @@ import com.shadow.tracker.plus.ui.theme.MatrixDarkGray
 import com.shadow.tracker.plus.ui.theme.MatrixNeonGreen
 import com.shadow.tracker.plus.ui.theme.MatrixRed
 
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+
 @Composable
 fun TokenList(
     tokens: List<TokenEntity>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState()
 ) {
     if (tokens.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
@@ -26,6 +30,7 @@ fun TokenList(
         }
     } else {
         LazyColumn(
+            state = listState,
             modifier = modifier.fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -33,6 +38,39 @@ fun TokenList(
             items(tokens, key = { it.mintAddress }) { token ->
                 TokenCard(token = token)
             }
+        }
+    }
+}
+
+@Composable
+fun DebugLogList(
+    logs: List<String>,
+    modifier: Modifier = Modifier
+) {
+    val listState = rememberLazyListState()
+    
+    // Auto-scroll to bottom
+    androidx.compose.runtime.LaunchedEffect(logs.size) {
+        if (logs.isNotEmpty()) {
+            listState.animateScrollToItem(logs.size - 1)
+        }
+    }
+    
+    LazyColumn(
+        state = listState,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(100.dp)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        items(logs) { log ->
+            Text(
+                text = "> $log",
+                color = MatrixNeonGreen.copy(alpha = 0.7f),
+                fontSize = 12.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+            )
         }
     }
 }
@@ -74,6 +112,11 @@ fun TokenCard(token: TokenEntity) {
                     color = MatrixNeonGreen,
                     fontWeight = FontWeight.Medium
                 )
+                Text(
+                    text = "Vol: $${token.volume24hUsd.toInt()}",
+                    color = Color.LightGray,
+                    fontSize = 12.sp
+                )
                 
                 val atlText = if (token.atlUsd > 0.0) {
                     val change = ((token.priceUsd - token.atlUsd) / token.atlUsd) * 100
@@ -88,12 +131,20 @@ fun TokenCard(token: TokenEntity) {
                     fontSize = 12.sp
                 )
                 
-                Text(
-                    text = if (token.isSafe) "SAFE" else "RISK",
-                    color = if (token.isSafe) MatrixNeonGreen else MatrixRed,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = if (token.isSafe) "SAFE" else "RISK",
+                        color = if (token.isSafe) MatrixNeonGreen else MatrixRed,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (token.isMutable) "[MUTABLE]" else "[LOCKED]",
+                        color = if (token.isMutable) MatrixRed else MatrixNeonGreen,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

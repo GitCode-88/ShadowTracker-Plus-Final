@@ -19,6 +19,8 @@ import kotlinx.coroutines.launch
 data class ShadowSettingsState(
     val isWalModeEnabled: Boolean = true,
     val liquidityFilterUsd: Float = 2000f,
+    val minVolume24hUsd: Float = 0f,
+    val maxPriceChangeFromAtl: Float = 500f, // in percentage
     val heliusApiKey: String = "",
     val birdeyeApiKey: String = "",
     val cryptoRankApiKey: String = "",
@@ -33,13 +35,36 @@ class ShadowViewModel(
     val settingsState: StateFlow<ShadowSettingsState> = _settingsState.asStateFlow()
 
     private var scanCooldownActive = false
+    
+    private val _debugLogs = MutableStateFlow<List<String>>(emptyList())
+    val debugLogs: StateFlow<List<String>> = _debugLogs.asStateFlow()
+    
+    private fun logDebug(message: String) {
+        val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+        _debugLogs.update { current -> 
+            val newLog = "[$timestamp] $message"
+            (current + newLog).takeLast(50) // Keep last 50 logs
+        }
+    }
 
-    // Derived state: Filter tokens from the database based on the current liquidity filter
+    // Derived state: Filter tokens from the database based on all filters
     val filteredTokens: StateFlow<List<TokenEntity>> = combine(
         tokenDao.getAllTokens(),
         _settingsState
     ) { tokens, settings ->
-        tokens.filter { it.liquidityUsd >= settings.liquidityFilterUsd }
+        tokens.filter { token ->
+            val passesLiquidity = token.liquidityUsd >= settings.liquidityFilterUsd
+            val passesVolume = token.volume24hUsd >= settings.minVolume24hUsd
+            
+            val priceChangePercent = if (token.atlUsd > 0) {
+                ((token.priceUsd - token.atlUsd) / token.atlUsd) * 100.0
+            } else {
+                0.0
+            }
+            val passesAtlChange = priceChangePercent <= settings.maxPriceChangeFromAtl
+            
+            passesLiquidity && passesVolume && passesAtlChange
+        }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -88,10 +113,12 @@ class ShadowViewModel(
         }
 
         try {
+            logDebug("Stage 1: Helius API Fetching...")
             // Stage 1: Helius (Live Feed)
             val requestBody = mapOf("limit" to 10, "displayOptions" to mapOf("showFungible" to true))
             val heliusResponse = ApiProvider.heliusApi.searchAssets(heliusKey, requestBody)
             val tokens = heliusResponse.items ?: emptyList()
+            logDebug("Helius: Found \${tokens.size} tokens.")
 
             for (tokenItem in tokens) {
                 val mintAddress = tokenItem.id ?: continue
@@ -102,18 +129,22 @@ class ShadowViewModel(
                 val cachedToken = tokenDao.getToken(mintAddress)
                 
                 // Stage 2: Birdeye (Liquidity Filter & Live Price)
+                logDebug("Stage 2: Birdeye checking \$symbol...")
                 val birdeyeResponse = try {
                     ApiProvider.birdeyeApi.getTokenOverview(birdeyeKey, mintAddress)
                 } catch (e: Exception) {
                     Log.e("ShadowViewModel", "Birdeye failed for \$mintAddress: \${e.message}")
+                    logDebug("Birdeye error for \$symbol")
                     continue
                 }
                 
                 val liquidity = birdeyeResponse.data?.liquidity ?: 0.0
                 val price = birdeyeResponse.data?.price ?: 0.0
+                val volume24h = birdeyeResponse.data?.v24hUSD ?: 0.0
                 
                 // Immediate fallback/continue if liquidity is below filter
                 if (liquidity < currentState.liquidityFilterUsd) {
+                    logDebug("Filtered out \$symbol (Liq: \$${liquidity.toInt()})")
                     continue
                 }
 
@@ -122,9 +153,11 @@ class ShadowViewModel(
                 val needsAtlUpdate = forceRefresh || cachedToken == null || (now - cachedToken.atlLastUpdated > 24 * 60 * 60 * 1000)
                 
                 var atlUsd = cachedToken?.atlUsd ?: 0.0
+                var athUsd = cachedToken?.athUsd ?: 0.0
                 var atlLastUpdated = cachedToken?.atlLastUpdated ?: 0L
 
                 if (needsAtlUpdate) {
+                    logDebug("Stage 3: CryptoRank fetching \$symbol...")
                     try {
                         // First find the coin ID
                         val coinsResponse = ApiProvider.cryptoRankApi.getCoins(cryptoRankKey, symbol)
@@ -133,14 +166,20 @@ class ShadowViewModel(
                         if (coinData != null) {
                             val priceResponse = ApiProvider.cryptoRankApi.getPrice(cryptoRankKey, coinData.id.toString())
                             val atl = priceResponse.data?.get(coinData.id.toString())?.atlPrice?.usd
+                            val ath = priceResponse.data?.get(coinData.id.toString())?.athPrice?.usd
                             if (atl != null) {
                                 atlUsd = atl
+                                athUsd = ath ?: 0.0
                                 atlLastUpdated = now
+                                logDebug("Updated ATL for \$symbol: \$atl")
                             }
                         }
                     } catch (e: Exception) {
                         Log.e("ShadowViewModel", "CryptoRank failed for \$symbol: \${e.message}")
+                        logDebug("CryptoRank error for \$symbol")
                     }
+                } else {
+                    logDebug("Stage 3: Using cached ATL for \$symbol")
                 }
 
                 // Persist to Room DB
@@ -151,14 +190,19 @@ class ShadowViewModel(
                     liquidityUsd = liquidity,
                     priceUsd = price,
                     atlUsd = atlUsd,
+                    athUsd = athUsd,
+                    volume24hUsd = volume24h,
                     atlLastUpdated = atlLastUpdated,
                     isSafe = true,
+                    isMutable = tokenItem.mutable ?: false,
                     riskScore = 0
                 )
                 tokenDao.insertToken(updatedToken)
+                logDebug("Saved \$symbol to DB")
             }
         } catch (e: Exception) {
             Log.e("ShadowViewModel", "Failed to fetch tokens: \${e.message}")
+            logDebug("Critical Error: \${e.message}")
         }
     }
 
@@ -167,6 +211,12 @@ class ShadowViewModel(
     }
     fun updateLiquidityFilter(value: Float) {
         _settingsState.update { it.copy(liquidityFilterUsd = value) }
+    }
+    fun updateMinVolume(value: Float) {
+        _settingsState.update { it.copy(minVolume24hUsd = value) }
+    }
+    fun updateMaxAtlChange(value: Float) {
+        _settingsState.update { it.copy(maxPriceChangeFromAtl = value) }
     }
     fun updateHeliusApiKey(key: String) {
         _settingsState.update { it.copy(heliusApiKey = key) }

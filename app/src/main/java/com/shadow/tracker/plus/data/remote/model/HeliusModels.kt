@@ -9,7 +9,14 @@ data class HeliusAssetResponse(
 data class HeliusAssetItem(
     @SerializedName("id") val id: String?,
     @SerializedName("content") val content: HeliusContent?,
-    @SerializedName("token_info") val tokenInfo: HeliusTokenInfo?
+    @SerializedName("token_info") val tokenInfo: HeliusTokenInfo?,
+    @SerializedName("mutable") val mutable: Boolean?,
+    @SerializedName("authorities") val authorities: List<HeliusAuthority>?
+)
+
+data class HeliusAuthority(
+    @SerializedName("address") val address: String?,
+    @SerializedName("scopes") val scopes: List<String>?
 )
 
 data class HeliusContent(

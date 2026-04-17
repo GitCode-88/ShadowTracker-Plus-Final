@@ -30,6 +30,8 @@ fun SettingsPanel(
     state: ShadowSettingsState,
     onWalModeChange: (Boolean) -> Unit,
     onLiquidityFilterChange: (Float) -> Unit,
+    onMinVolumeChange: (Float) -> Unit,
+    onMaxAtlChange: (Float) -> Unit,
     onHeliusApiKeyChange: (String) -> Unit,
     onBirdeyeApiKeyChange: (String) -> Unit,
     onCryptoRankApiKeyChange: (String) -> Unit,
@@ -107,13 +109,50 @@ fun SettingsPanel(
             // Liquidity Filter Slider
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "Liquidity Filter: \$${state.liquidityFilterUsd.roundToInt()}",
-                    color = Color.White
+                    text = "Min Liquidity: \$${state.liquidityFilterUsd.roundToInt()}",
+                    color = Color.White,
+                    fontSize = 14.sp
                 )
                 Slider(
                     value = state.liquidityFilterUsd,
                     onValueChange = onLiquidityFilterChange,
                     valueRange = 0f..100000f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = MatrixNeonGreen,
+                        activeTrackColor = MatrixNeonGreen
+                    )
+                )
+            }
+
+            // Min 24h Volume Slider
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Min 24h Volume: \$${state.minVolume24hUsd.roundToInt()}",
+                    color = Color.White,
+                    fontSize = 14.sp
+                )
+                Slider(
+                    value = state.minVolume24hUsd,
+                    onValueChange = onMinVolumeChange,
+                    valueRange = 0f..500000f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = MatrixNeonGreen,
+                        activeTrackColor = MatrixNeonGreen
+                    )
+                )
+            }
+
+            // Max ATL Change Slider
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Max +% from ATL: ${state.maxPriceChangeFromAtl.roundToInt()}%",
+                    color = Color.White,
+                    fontSize = 14.sp
+                )
+                Slider(
+                    value = state.maxPriceChangeFromAtl,
+                    onValueChange = onMaxAtlChange,
+                    valueRange = 0f..2000f,
                     colors = SliderDefaults.colors(
                         thumbColor = MatrixNeonGreen,
                         activeTrackColor = MatrixNeonGreen

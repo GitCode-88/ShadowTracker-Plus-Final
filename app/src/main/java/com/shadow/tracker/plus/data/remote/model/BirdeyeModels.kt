@@ -10,5 +10,6 @@ data class BirdeyeOverviewResponse(
 data class BirdeyeData(
     @SerializedName("address") val address: String?,
     @SerializedName("liquidity") val liquidity: Double?,
-    @SerializedName("price") val price: Double?
+    @SerializedName("price") val price: Double?,
+    @SerializedName("v24hUSD") val v24hUSD: Double?
 )
