@@ -2,7 +2,20 @@ package com.shadow.tracker.plus.data.remote.model
 
 import com.google.gson.annotations.SerializedName
 
-data class HeliusAssetResponse(
+data class HeliusRpcRequest(
+    @SerializedName("jsonrpc") val jsonrpc: String = "2.0",
+    @SerializedName("id") val id: String = "1",
+    @SerializedName("method") val method: String,
+    @SerializedName("params") val params: Map<String, Any>
+)
+
+data class HeliusRpcResponse(
+    @SerializedName("jsonrpc") val jsonrpc: String?,
+    @SerializedName("id") val id: String?,
+    @SerializedName("result") val result: HeliusAssetResult?
+)
+
+data class HeliusAssetResult(
     @SerializedName("items") val items: List<HeliusAssetItem>?
 )
 

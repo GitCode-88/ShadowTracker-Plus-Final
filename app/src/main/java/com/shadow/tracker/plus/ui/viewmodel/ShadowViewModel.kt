@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.shadow.tracker.plus.data.local.TokenDao
 import com.shadow.tracker.plus.data.local.TokenEntity
+import com.shadow.tracker.plus.data.remote.model.HeliusRpcRequest
 import com.shadow.tracker.plus.data.remote.provider.ApiProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -137,10 +138,15 @@ class ShadowViewModel(
 
         try {
             logDebug("Worker A (Helius): Scanning new mints...")
-            // Specifically using searchAssets from the Helius DAS API
-            val requestBody = mapOf("limit" to 10, "displayOptions" to mapOf("showFungible" to true))
+            // Specifically using searchAssets from the Helius DAS API via JSON-RPC
+            val params = mapOf("limit" to 10, "displayOptions" to mapOf("showFungible" to true))
+            val requestBody = HeliusRpcRequest(
+                method = "searchAssets",
+                params = params
+            )
+            
             val response = ApiProvider.heliusApi.searchAssets(heliusKey, requestBody)
-            val tokens = response.items ?: emptyList()
+            val tokens = response.result?.items ?: emptyList()
             logDebug("Worker A (Helius): OK. Found \${tokens.size} tokens.")
 
             for (item in tokens) {
@@ -262,10 +268,18 @@ class ShadowViewModel(
                                 atlLastUpdated = now
                             )
                             tokenDao.insertToken(updatedToken)
+                        } else {
+                            // Coin not found on CryptoRank. Update timestamp to avoid hammering API.
+                            val updatedToken = token.copy(atlLastUpdated = now)
+                            tokenDao.insertToken(updatedToken)
                         }
                     } catch (e: Exception) {
                         Log.e("ShadowViewModel", "Worker C (CryptoRank) failed for \${token.symbol}: \${e.message}")
                         logDebug("Worker C (CryptoRank): Error for \${token.symbol}")
+                        
+                        // Also update timestamp on generic errors to enforce cooldown
+                        val updatedToken = token.copy(atlLastUpdated = now)
+                        tokenDao.insertToken(updatedToken)
                     }
                 }
             }
