@@ -72,16 +72,37 @@ class ShadowViewModel(
     )
 
     init {
-        startLiveScan()
+        startWorkers()
     }
 
-    private fun startLiveScan() {
+    private fun startWorkers() {
+        // Worker A: Helius (Live Feed Scan)
         viewModelScope.launch {
             while (true) {
                 if (!scanCooldownActive) {
-                    fetchLiveTokens(forceRefresh = false)
+                    workerHeliusScan()
                 }
                 delay(15000) // Poll every 15 seconds
+            }
+        }
+
+        // Worker B: Birdeye (Liquidity & Price Updater)
+        viewModelScope.launch {
+            while (true) {
+                if (!scanCooldownActive) {
+                    workerBirdeyeScan()
+                }
+                delay(10000) // Poll every 10 seconds
+            }
+        }
+
+        // Worker C: CryptoRank (ATL Updater)
+        viewModelScope.launch {
+            while (true) {
+                if (!scanCooldownActive) {
+                    workerCryptoRankScan(forceRefresh = false)
+                }
+                delay(60000) // Poll every 60 seconds
             }
         }
     }
@@ -92,117 +113,168 @@ class ShadowViewModel(
             scanCooldownActive = true
             _settingsState.update { it.copy(isScanning = true) }
             
-            fetchLiveTokens(forceRefresh = true)
+            // Execute all workers concurrently for force scan
+            val heliusJob = launch { workerHeliusScan() }
+            val birdeyeJob = launch { workerBirdeyeScan() }
+            val cryptoRankJob = launch { workerCryptoRankScan(forceRefresh = true) }
+            
+            heliusJob.join()
+            birdeyeJob.join()
+            cryptoRankJob.join()
             
             _settingsState.update { it.copy(isScanning = false) }
-            // 3 seconds cooldown
-            delay(3000)
+            delay(3000) // 3 seconds cooldown
             scanCooldownActive = false
         }
     }
 
-    private suspend fun fetchLiveTokens(forceRefresh: Boolean) {
-        val currentState = _settingsState.value
-        val heliusKey = currentState.heliusApiKey
-        val birdeyeKey = currentState.birdeyeApiKey
-        val cryptoRankKey = currentState.cryptoRankApiKey
-
-        if (heliusKey.isBlank() || birdeyeKey.isBlank() || cryptoRankKey.isBlank()) {
-            Log.d("ShadowViewModel", "API keys not fully set. Skipping scan.")
+    private suspend fun workerHeliusScan() {
+        val heliusKey = _settingsState.value.heliusApiKey
+        if (heliusKey.isBlank()) {
+            logDebug("Worker A (Helius): Key missing, skipping.")
             return
         }
 
         try {
-            logDebug("Stage 1: Helius API Fetching...")
-            // Stage 1: Helius (Live Feed)
+            logDebug("Worker A (Helius): Scanning new mints...")
+            // Specifically using searchAssets from the Helius DAS API
             val requestBody = mapOf("limit" to 10, "displayOptions" to mapOf("showFungible" to true))
-            val heliusResponse = ApiProvider.heliusApi.searchAssets(heliusKey, requestBody)
-            val tokens = heliusResponse.items ?: emptyList()
-            logDebug("Helius: Found \${tokens.size} tokens.")
+            val response = ApiProvider.heliusApi.searchAssets(heliusKey, requestBody)
+            val tokens = response.items ?: emptyList()
+            logDebug("Worker A (Helius): OK. Found \${tokens.size} tokens.")
 
-            for (tokenItem in tokens) {
-                val mintAddress = tokenItem.id ?: continue
-                val symbol = tokenItem.content?.metadata?.symbol ?: "UNKNOWN"
-                val name = tokenItem.content?.metadata?.name ?: "Unknown Token"
-
-                // Check existing cache
-                val cachedToken = tokenDao.getToken(mintAddress)
+            for (item in tokens) {
+                val mintAddress = item.id ?: continue
+                val existingToken = tokenDao.getToken(mintAddress)
                 
-                // Stage 2: Birdeye (Liquidity Filter & Live Price)
-                logDebug("Stage 2: Birdeye checking \$symbol...")
-                val birdeyeResponse = try {
-                    ApiProvider.birdeyeApi.getTokenOverview(birdeyeKey, mintAddress)
+                // Only insert if it doesn't exist to prevent overwriting Birdeye/CryptoRank data
+                if (existingToken == null) {
+                    val symbol = item.content?.metadata?.symbol ?: "UNKNOWN"
+                    val name = item.content?.metadata?.name ?: "Unknown Token"
+                    val isMutable = item.mutable ?: false
+                    
+                    val newToken = TokenEntity(
+                        mintAddress = mintAddress,
+                        name = name,
+                        symbol = symbol,
+                        liquidityUsd = 0.0,
+                        priceUsd = 0.0,
+                        atlUsd = 0.0,
+                        athUsd = 0.0,
+                        volume24hUsd = 0.0,
+                        atlLastUpdated = 0L,
+                        isSafe = true,
+                        isMutable = isMutable,
+                        riskScore = 0
+                    )
+                    tokenDao.insertToken(newToken)
+                    logDebug("Worker A (Helius): Inserted new token \$symbol.")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ShadowViewModel", "Worker A (Helius) Error: \${e.message}")
+            logDebug("Worker A (Helius): Error \${e.message?.take(20)}...")
+        }
+    }
+
+    private suspend fun workerBirdeyeScan() {
+        val birdeyeKey = _settingsState.value.birdeyeApiKey
+        if (birdeyeKey.isBlank()) {
+            logDebug("Worker B (Birdeye): Key missing, skipping.")
+            return
+        }
+
+        try {
+            // Get all tokens from local DB to update them. In a real app, you might want to paginate or filter.
+            val tokensFlow = tokenDao.getAllTokens()
+            // We need a single snapshot of current tokens
+            var currentTokens: List<TokenEntity> = emptyList()
+            val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                tokensFlow.collect { currentTokens = it }
+            }
+            delay(100) // Wait for snapshot
+            job.cancel()
+            
+            if (currentTokens.isEmpty()) return
+            logDebug("Worker B (Birdeye): Updating \${currentTokens.size} tokens...")
+
+            for (token in currentTokens) {
+                try {
+                    val response = ApiProvider.birdeyeApi.getTokenOverview(birdeyeKey, token.mintAddress)
+                    val liq = response.data?.liquidity ?: 0.0
+                    val price = response.data?.price ?: 0.0
+                    val vol = response.data?.v24hUSD ?: 0.0
+                    
+                    val updatedToken = token.copy(
+                        liquidityUsd = liq,
+                        priceUsd = price,
+                        volume24hUsd = vol
+                    )
+                    tokenDao.insertToken(updatedToken)
                 } catch (e: Exception) {
-                    Log.e("ShadowViewModel", "Birdeye failed for \$mintAddress: \${e.message}")
-                    logDebug("Birdeye error for \$symbol")
-                    continue
+                    Log.e("ShadowViewModel", "Worker B (Birdeye) failed for \${token.symbol}: \${e.message}")
+                    logDebug("Worker B (Birdeye): Error for \${token.symbol}")
                 }
-                
-                val liquidity = birdeyeResponse.data?.liquidity ?: 0.0
-                val price = birdeyeResponse.data?.price ?: 0.0
-                val volume24h = birdeyeResponse.data?.v24hUSD ?: 0.0
-                
-                // Immediate fallback/continue if liquidity is below filter
-                if (liquidity < currentState.liquidityFilterUsd) {
-                    logDebug("Filtered out \$symbol (Liq: \$${liquidity.toInt()})")
-                    continue
-                }
+            }
+            logDebug("Worker B (Birdeye): OK.")
+        } catch (e: Exception) {
+            Log.e("ShadowViewModel", "Worker B (Birdeye) Error: \${e.message}")
+            logDebug("Worker B (Birdeye): Global Error \${e.message?.take(20)}...")
+        }
+    }
 
-                // Stage 3: CryptoRank (ATL Data)
-                val now = System.currentTimeMillis()
-                val needsAtlUpdate = forceRefresh || cachedToken == null || (now - cachedToken.atlLastUpdated > 24 * 60 * 60 * 1000)
-                
-                var atlUsd = cachedToken?.atlUsd ?: 0.0
-                var athUsd = cachedToken?.athUsd ?: 0.0
-                var atlLastUpdated = cachedToken?.atlLastUpdated ?: 0L
+    private suspend fun workerCryptoRankScan(forceRefresh: Boolean) {
+        val cryptoRankKey = _settingsState.value.cryptoRankApiKey
+        if (cryptoRankKey.isBlank()) {
+            logDebug("Worker C (CryptoRank): Key missing, skipping.")
+            return
+        }
 
-                if (needsAtlUpdate) {
-                    logDebug("Stage 3: CryptoRank fetching \$symbol...")
+        try {
+            val tokensFlow = tokenDao.getAllTokens()
+            var currentTokens: List<TokenEntity> = emptyList()
+            val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                tokensFlow.collect { currentTokens = it }
+            }
+            delay(100) // Wait for snapshot
+            job.cancel()
+
+            val now = System.currentTimeMillis()
+            var checkedCount = 0
+
+            for (token in currentTokens) {
+                // Only update if older than 24 hours or forced
+                val needsUpdate = forceRefresh || (now - token.atlLastUpdated > 24 * 60 * 60 * 1000)
+                if (needsUpdate) {
+                    checkedCount++
                     try {
-                        // First find the coin ID
-                        val coinsResponse = ApiProvider.cryptoRankApi.getCoins(cryptoRankKey, symbol)
-                        val coinData = coinsResponse.data?.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) }
+                        val coinsResponse = ApiProvider.cryptoRankApi.getCoins(cryptoRankKey, token.symbol)
+                        val coinData = coinsResponse.data?.firstOrNull { it.symbol.equals(token.symbol, ignoreCase = true) }
                         
                         if (coinData != null) {
                             val priceResponse = ApiProvider.cryptoRankApi.getPrice(cryptoRankKey, coinData.id.toString())
                             val atl = priceResponse.data?.get(coinData.id.toString())?.atlPrice?.usd
                             val ath = priceResponse.data?.get(coinData.id.toString())?.athPrice?.usd
-                            if (atl != null) {
-                                atlUsd = atl
-                                athUsd = ath ?: 0.0
+                            
+                            val updatedToken = token.copy(
+                                atlUsd = atl ?: token.atlUsd,
+                                athUsd = ath ?: token.athUsd,
                                 atlLastUpdated = now
-                                logDebug("Updated ATL for \$symbol: \$atl")
-                            }
+                            )
+                            tokenDao.insertToken(updatedToken)
                         }
                     } catch (e: Exception) {
-                        Log.e("ShadowViewModel", "CryptoRank failed for \$symbol: \${e.message}")
-                        logDebug("CryptoRank error for \$symbol")
+                        Log.e("ShadowViewModel", "Worker C (CryptoRank) failed for \${token.symbol}: \${e.message}")
+                        logDebug("Worker C (CryptoRank): Error for \${token.symbol}")
                     }
-                } else {
-                    logDebug("Stage 3: Using cached ATL for \$symbol")
                 }
-
-                // Persist to Room DB
-                val updatedToken = TokenEntity(
-                    mintAddress = mintAddress,
-                    name = name,
-                    symbol = symbol,
-                    liquidityUsd = liquidity,
-                    priceUsd = price,
-                    atlUsd = atlUsd,
-                    athUsd = athUsd,
-                    volume24hUsd = volume24h,
-                    atlLastUpdated = atlLastUpdated,
-                    isSafe = true,
-                    isMutable = tokenItem.mutable ?: false,
-                    riskScore = 0
-                )
-                tokenDao.insertToken(updatedToken)
-                logDebug("Saved \$symbol to DB")
+            }
+            if (checkedCount > 0) {
+                logDebug("Worker C (CryptoRank): OK. Updated \$checkedCount tokens.")
             }
         } catch (e: Exception) {
-            Log.e("ShadowViewModel", "Failed to fetch tokens: \${e.message}")
-            logDebug("Critical Error: \${e.message}")
+            Log.e("ShadowViewModel", "Worker C (CryptoRank) Error: \${e.message}")
+            logDebug("Worker C (CryptoRank): Global Error \${e.message?.take(20)}...")
         }
     }
 
