@@ -1,4 +1,5 @@
 package com.shadow.tracker.plus.ui.viewmodel
+import kotlinx.coroutines.isActive
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -25,7 +26,8 @@ data class ShadowSettingsState(
     val minVolumeUsd: Float = 1000f,
     val minTxns: Float = 50f,
     val maxPriceChangeFromAtl: Float = 500f, // in percentage (+% from bottom)
-    val isScanning: Boolean = false
+    val isScanning: Boolean = false,
+    val heliusApiKey: String = ""
 )
 
 class ShadowViewModel(
@@ -98,108 +100,197 @@ class ShadowViewModel(
         initialValue = emptyList()
     )
 
+    private var scanJob: kotlinx.coroutines.Job? = null
+
     init {
-        startWorkers()
+        // Pipeline starts manually via forceScan or UI toggle
     }
 
-    private fun startWorkers() {
-        // Worker A: Helius (Live Feed Scan)
-        viewModelScope.launch {
-            while (true) {
-                if (!scanCooldownActive) {
-                    workerHeliusScan()
-                }
-                delay(15000) // Poll every 15 seconds
-            }
-        }
-
-        // Worker B: DexScreener (Market Data Updater)
-        viewModelScope.launch {
-            while (true) {
-                if (!scanCooldownActive) {
-                    workerDexScreenerScan()
-                }
-                delay(10000) // Poll every 10 seconds
-            }
-        }
-
-        // Worker C: RugCheck (Security Scanner)
-        viewModelScope.launch {
-            while (true) {
-                if (!scanCooldownActive) {
-                    workerRugCheckScan()
-                }
-                delay(15000) // Poll every 15 seconds
-            }
+    fun startScanning() {
+        if (_settingsState.value.isScanning) return
+        _settingsState.update { it.copy(isScanning = true) }
+        logDebug("Initializing Phönix-Matrix...")
+        
+        scanJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runPipeline()
         }
     }
 
+    fun stopScanning() {
+        _settingsState.update { it.copy(isScanning = false) }
+        scanJob?.cancel()
+        logDebug("Matrix Scanner offline.")
+    }
+
+    fun forceScanNow() {
+        if (!_settingsState.value.isScanning) {
+            startScanning()
+        }
+    }
+    
     fun forceScan() {
-        if (scanCooldownActive) return
-        viewModelScope.launch {
-            scanCooldownActive = true
-            _settingsState.update { it.copy(isScanning = true) }
-            
-            // Execute all workers concurrently for force scan
-            val heliusJob = launch { workerHeliusScan() }
-            val dexScreenerJob = launch { workerDexScreenerScan() }
-            val rugCheckJob = launch { workerRugCheckScan() }
-            
-            heliusJob.join()
-            dexScreenerJob.join()
-            rugCheckJob.join()
-            
-            _settingsState.update { it.copy(isScanning = false) }
-            delay(3000) // 3 seconds cooldown
-            scanCooldownActive = false
+        forceScanNow()
+    }
+
+    private suspend fun runPipeline() {
+        while (kotlinx.coroutines.currentCoroutineContext().isActive && _settingsState.value.isScanning) {
+            try {
+                stage1Ingestion()
+                kotlinx.coroutines.delay(2000)
+                stage2Analysis()
+                kotlinx.coroutines.delay(2000)
+                stage3Security()
+            } catch (e: Exception) {
+                logDebug("> [Pipeline Error] ${e.message}")
+            }
+            kotlinx.coroutines.delay(15000) // General pipeline loop
         }
     }
 
-    private suspend fun workerHeliusScan() {
-        // Renamed internally, this is now Worker A (DexScreener Latest Profile Discovery)
-        logDebug("Worker A (Discovery): Scanning DexScreener...")
+    private suspend fun stage1Ingestion() {
+        logDebug("Stage 1: DexScreener Ingestion...")
         try {
-            // Using a hacky but functional approach to fetch the latest tokens from DexScreener's public undocumented API
-            // For production, using the documented Search/Latest APIs is preferred if this endpoint fails.
-            val client = okhttp3.OkHttpClient()
-            val request = okhttp3.Request.Builder()
-                .url("https://api.dexscreener.com/token-profiles/latest/v1")
-                .build()
-
-            val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                val jsonString = response.body?.string() ?: ""
-                val jsonArray = org.json.JSONArray(jsonString)
+            val profiles = ApiProvider.dexScreenerApi.getLatestTokenProfiles()
+            val validProfiles = profiles.filter { it.chainId == "solana" && !it.tokenAddress.isNullOrBlank() }
+            
+            for (profile in validProfiles) {
+                val addr = profile.tokenAddress!!
+                insertNewToken(
+                    mintAddress = addr,
+                    symbol = profile.header ?: "UNK",
+                    name = profile.description ?: "Unknown",
+                    isMutable = false // Will be updated by Helius
+                )
+            }
+            
+            val tokensFlow = tokenDao.getAllTokens()
+            var currentTokens: List<TokenEntity> = emptyList()
+            val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                tokensFlow.collect { currentTokens = it }
+            }
+            kotlinx.coroutines.delay(100)
+            job.cancel()
+            
+            if (currentTokens.isEmpty()) return
+            
+            val chunks = currentTokens.chunked(30)
+            for (chunk in chunks) {
+                val addresses = chunk.joinToString(",") { it.mintAddress }
+                val response = ApiProvider.dexScreenerApi.getTokens(addresses)
                 
-                var newTokensCount = 0
-                for (i in 0 until jsonArray.length()) {
-                    val obj = jsonArray.getJSONObject(i)
-                    val chainId = obj.optString("chainId")
-                    
-                    if (chainId == "solana") {
-                        val mintAddress = obj.optString("tokenAddress")
-                        if (mintAddress.isNotBlank()) {
-                            val isNew = insertNewToken(
-                                mintAddress = mintAddress,
-                                symbol = "UNK", // Symbol will be populated by Worker B
-                                name = obj.optString("description").take(20), 
-                                isMutable = false // Handled later
+                response.pairs?.let { pairs ->
+                    for (token in chunk) {
+                        val bestPair = pairs.filter { it.baseToken?.address == token.mintAddress }
+                            .maxByOrNull { it.liquidity?.usd ?: 0.0 }
+                            
+                        if (bestPair != null) {
+                            val price = bestPair.priceUsd?.toDoubleOrNull() ?: 0.0
+                            val vol24h = bestPair.volume?.h24 ?: 0.0
+                            
+                            val updated = token.copy(
+                                priceUsd = price,
+                                liquidityUsd = bestPair.liquidity?.usd ?: 0.0,
+                                volume24hUsd = vol24h,
+                                marketCapUsd = bestPair.fdv ?: 0.0,
+                                txns24h = (bestPair.txns?.h24?.buys ?: 0) + (bestPair.txns?.h24?.sells ?: 0),
+                                pairCreatedAt = bestPair.pairCreatedAt ?: token.pairCreatedAt,
+                                athUsd = if (price > token.athUsd) price else token.athUsd,
+                                narrativeTags = profileTagsExtract(bestPair.baseToken?.name ?: ""),
+                                lastDiscoveredAt = System.currentTimeMillis()
                             )
-                            if (isNew) newTokensCount++
+                            tokenDao.insertToken(updated)
                         }
                     }
                 }
-                logDebug("Worker A (Discovery): OK. Added \$newTokensCount new Solana Mints.")
-            } else {
-                logDebug("Worker A: DexScreener Profile API failed \${response.code}")
+                kotlinx.coroutines.delay(250) // rate limit
             }
         } catch (e: Exception) {
-            Log.e("ShadowViewModel", "Discovery Error: \${e.message}")
-            logDebug("Worker A Error: \${e.message?.take(20)}")
+            logDebug("Ingestion Error: ${e.message?.take(30)}")
+        }
+    }
+    
+    private fun profileTagsExtract(name: String): String? {
+        val lower = name.lowercase()
+        return when {
+            lower.contains("ai") -> "AI"
+            lower.contains("depin") -> "DePIN"
+            lower.contains("game") -> "Gaming"
+            lower.contains("rwa") -> "RWA"
+            else -> null
         }
     }
 
-    private suspend fun insertNewToken(mintAddress: String, symbol: String, name: String, isMutable: Boolean): Boolean {
+    private suspend fun stage2Analysis() {
+        logDebug("Stage 2: Helius Analysis...")
+        val apiKey = _settingsState.value.heliusApiKey
+        if (apiKey.isBlank()) return
+        
+        val pending = tokenDao.getTokensPendingAnalysis(10) // Limit to save RPC calls
+        for (token in pending) {
+            try {
+                // Get BlockTime
+                val req = HeliusRpcRequest(
+                    method = "getSignaturesForAddress",
+                    params = listOf(token.mintAddress, mapOf("limit" to 1))
+                )
+                val sigRes = ApiProvider.heliusApi.getSignaturesForAddress(apiKey, req)
+                val blockTime = sigRes.result?.firstOrNull()?.blockTime
+                
+                val ageInDays = if (blockTime != null) {
+                    ((System.currentTimeMillis() / 1000) - blockTime) / (60 * 60 * 24)
+                } else null
+                
+                // Pseudo RVOL logic based on current snapshot
+                val pseudoRvol = if (token.volume24hUsd > 0) token.volume24hUsd / 10000.0 else 0.0
+                
+                tokenDao.insertToken(token.copy(
+                    genesisBlockTime = blockTime,
+                    ageInDays = ageInDays?.toInt(),
+                    rvol = pseudoRvol,
+                    lastAnalysisAt = System.currentTimeMillis()
+                ))
+                kotlinx.coroutines.delay(150)
+            } catch (e: Exception) {
+                logDebug("Analysis Error: ${e.message?.take(20)}")
+            }
+        }
+    }
+
+    private suspend fun stage3Security() {
+        logDebug("Stage 3: RugCheck Security...")
+        val pending = tokenDao.getTokensPendingRugCheck(1) // STRICT LIMIT: 1 per cycle (respect 5 RPM)
+        if (pending.isEmpty()) return
+        
+        val token = pending[0]
+        try {
+            val response = ApiProvider.rugCheckApi.getReportSummary(token.mintAddress)
+            val score = response.score ?: 10000
+            
+            val isSafe = score < 1000
+            
+            tokenDao.insertToken(token.copy(
+                isRugCheckComplete = true,
+                isSafe = isSafe,
+                riskScore = score,
+                lastRugCheckAt = System.currentTimeMillis()
+            ))
+            
+            if (isSafe && (token.rvol ?: 0.0) >= 3.0) {
+                 sendFallenGiantNotification(token)
+            }
+            
+            tokenDao.deleteUnsafeTokens()
+            
+        } catch (e: Exception) {
+            logDebug("RugCheck Error: ${e.message?.take(20)}")
+        }
+    }
+    
+    private fun sendFallenGiantNotification(token: TokenEntity) {
+        logDebug("ALARM: " + token.symbol + " is a FALLEN GIANT!")
+    }
+
+private suspend fun insertNewToken(mintAddress: String, symbol: String, name: String, isMutable: Boolean): Boolean {
         val existingToken = tokenDao.getToken(mintAddress)
         if (existingToken == null) {
             val newToken = TokenEntity(
@@ -242,127 +333,7 @@ class ShadowViewModel(
         return false
     }
 
-    private suspend fun workerDexScreenerScan() {
-        try {
-            val tokensFlow = tokenDao.getAllTokens()
-            var currentTokens: List<TokenEntity> = emptyList()
-            val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                tokensFlow.collect { currentTokens = it }
-            }
-            delay(100)
-            job.cancel()
-            
-            if (currentTokens.isEmpty()) return
-            
-            val chunks = currentTokens.chunked(30)
-            logDebug("Worker B (Market Data): Updating \${currentTokens.size} tokens...")
-
-            // Helper to get true ATL if missing from DexScreener using CoinGecko (Free/Public search)
-            suspend fun fetchAtlFallback(symbol: String): Double {
-                try {
-                    val client = okhttp3.OkHttpClient()
-                    // Search for the coin ID
-                    val searchReq = okhttp3.Request.Builder()
-                        .url("https://api.coingecko.com/api/v3/search?query=\$symbol")
-                        .build()
-                    val searchRes = client.newCall(searchReq).execute()
-                    if (searchRes.isSuccessful) {
-                        val searchJson = org.json.JSONObject(searchRes.body?.string() ?: "{}")
-                        val coins = searchJson.optJSONArray("coins")
-                        if (coins != null && coins.length() > 0) {
-                            val coinId = coins.getJSONObject(0).optString("id")
-                            
-                            // Fetch coin details for ATL
-                            val detailsReq = okhttp3.Request.Builder()
-                                .url("https://api.coingecko.com/api/v3/coins/\$coinId")
-                                .build()
-                            val detailsRes = client.newCall(detailsReq).execute()
-                            if (detailsRes.isSuccessful) {
-                                val detailsJson = org.json.JSONObject(detailsRes.body?.string() ?: "{}")
-                                val marketData = detailsJson.optJSONObject("market_data")
-                                val atlObj = marketData?.optJSONObject("atl")
-                                val atlUsd = atlObj?.optDouble("usd") ?: 0.0
-                                return atlUsd
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    // Ignore CoinGecko rate limits/errors silently so we don't spam logs
-                }
-                return 0.0
-            }
-
-            for (chunk in chunks) {
-                val addresses = chunk.joinToString(",") { it.mintAddress }
-                try {
-                    val response = ApiProvider.dexScreenerApi.getTokens(addresses)
-                    val pairs = response.pairs ?: emptyList()
-                    
-                    for (token in chunk) {
-                        val bestPair = pairs.firstOrNull { it.baseToken?.address == token.mintAddress }
-                        if (bestPair != null) {
-                            val liq = bestPair.liquidity?.usd ?: 0.0
-                            val priceStr = bestPair.priceUsd ?: "0"
-                            val price = priceStr.toDoubleOrNull() ?: 0.0
-                            
-                            val vol1h = bestPair.volume?.h1 ?: 0.0
-                            val vol6h = bestPair.volume?.h6 ?: 0.0
-                            val vol24h = bestPair.volume?.h24 ?: 0.0
-                            
-                            val txns1h = (bestPair.txns?.h1?.buys ?: 0) + (bestPair.txns?.h1?.sells ?: 0)
-                            val txns6h = (bestPair.txns?.h6?.buys ?: 0) + (bestPair.txns?.h6?.sells ?: 0)
-                            val txns24h = (bestPair.txns?.h24?.buys ?: 0) + (bestPair.txns?.h24?.sells ?: 0)
-                            
-                            val fdv = bestPair.fdv ?: 0.0
-                            val createdAt = bestPair.pairCreatedAt ?: token.pairCreatedAt
-                            
-                            val symbol = bestPair.baseToken?.symbol ?: token.symbol
-                            
-                            // Get ATL. If currently 0, try CoinGecko Fallback. If that fails, set it to the first seen price.
-                            var atl = token.atlUsd
-                            if (atl == 0.0 && price > 0.0) {
-                                atl = fetchAtlFallback(symbol)
-                                if (atl == 0.0) {
-                                    atl = price // Set initial price as local ATL
-                                }
-                            }
-                            
-                            val ath = if (price > token.athUsd) price else token.athUsd
-                            
-                            val name = bestPair.baseToken?.name ?: token.name
-                            
-                            val updatedToken = token.copy(
-                                name = name.ifBlank { "Unknown" },
-                                symbol = symbol,
-                                liquidityUsd = liq,
-                                priceUsd = price,
-                                volume1hUsd = vol1h,
-                                
-                                volume24hUsd = vol24h,
-                                marketCapUsd = fdv,
-                                txns1h = txns1h,
-                                
-                                txns24h = txns24h,
-                                
-                                pairCreatedAt = createdAt,
-                                atlUsd = atl,
-                                athUsd = ath
-                            )
-                            tokenDao.insertToken(updatedToken)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e("ShadowViewModel", "Worker B (Market) chunk failed: \${e.message}")
-                    logDebug("Worker B (Market): Error fetching chunk")
-                }
-            }
-            logDebug("Worker B (Market): OK.")
-        } catch (e: Exception) {
-            Log.e("ShadowViewModel", "Worker B (Market) Error: \${e.message}")
-            logDebug("Worker B (Market): Global Error \${e.message?.take(20)}")
-        }
-    }
-
+    
     private suspend fun workerRugCheckScan() {
         try {
             val tokensFlow = tokenDao.getAllTokens()

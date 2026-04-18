@@ -49,15 +49,22 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "V4 Architecture Notice",
+                    text = "Helius API Key (Required for Age/Accumulation Checks)",
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
-                )
-                Text(
-                    text = "API Keys are no longer required. The app runs fully autonomous via DexScreener, RugCheck, and CoinGecko (Free Tier).",
-                    color = androidx.compose.ui.graphics.Color.Gray,
                     fontSize = 14.sp
+                )
+                OutlinedTextField(
+                    value = state.heliusApiKey,
+                    onValueChange = onHeliusApiKeyChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MatrixNeonGreen,
+                        unfocusedBorderColor = Color.Gray,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    placeholder = { Text("Enter Helius API Key") }
                 )
             }
         }
