@@ -55,36 +55,21 @@ fun ShadowTrackerApp(
     
     val navController = rememberNavController()
 
-    NavHost(navController = navController, startDestination = "dashboard") {
-        composable("dashboard") {
-            Column(modifier = Modifier.fillMaxSize()) {
-                FilterPanel(
-                    state = settingsState,
-                    onWalModeChange = viewModel::updateWalMode,
-                    onLiquidityFilterChange = viewModel::updateLiquidityFilter,
-                    onMinFdvChange = viewModel::updateMinFdv,
-                    onTimeSelectionChange = viewModel::updateTimeSelection,
-                    onMinVolumeChange = viewModel::updateMinVolume,
-                    onMinTxnsChange = viewModel::updateMinTxns,
-                    onMinTradersChange = viewModel::updateMinTraders,
-                    onMaxAgeHoursChange = viewModel::updateMaxAgeHours,
-                    onMaxAtlChange = viewModel::updateMaxAtlChange,
-                    onForceScan = viewModel::forceScan,
-                    onNavigateSettings = { navController.navigate("settings") }
-                )
-                
-                TokenList(tokens = tokens, modifier = Modifier.weight(1f))
-                
-                DebugLogList(logs = debugLogs)
-            }
-        }
-        composable("settings") {
-            SettingsScreen(
-                state = settingsState,
-                onHeliusApiKeyChange = viewModel::updateHeliusApiKey,
-                onBirdeyeApiKeyChange = viewModel::updateBirdeyeApiKey,
-                onNavigateBack = { navController.popBackStack() }
-            )
-        }
+    Column(modifier = Modifier.fillMaxSize()) {
+        FilterPanel(
+            state = settingsState,
+            onWalModeChange = viewModel::updateWalMode,
+            onLiquidityFilterChange = viewModel::updateLiquidityFilter,
+            onMinFdvChange = viewModel::updateMinFdv,
+            onTimeSelectionChange = viewModel::updateTimeSelection,
+            onMinVolumeChange = viewModel::updateMinVolume,
+            onMinTxnsChange = viewModel::updateMinTxns,
+            onMaxAtlChange = viewModel::updateMaxAtlChange,
+            onForceScan = viewModel::forceScan
+        )
+        
+        TokenList(tokens = tokens, modifier = Modifier.weight(1f))
+        
+        DebugLogList(logs = debugLogs)
     }
 }

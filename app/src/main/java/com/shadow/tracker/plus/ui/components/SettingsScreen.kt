@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Color
 import com.shadow.tracker.plus.ui.theme.MatrixDarkGray
 import com.shadow.tracker.plus.ui.theme.MatrixNeonGreen
 import com.shadow.tracker.plus.ui.viewmodel.ShadowSettingsState
@@ -47,27 +48,16 @@ fun SettingsScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                OutlinedTextField(
-                    value = state.heliusApiKey,
-                    onValueChange = onHeliusApiKeyChange,
-                    label = { Text("Helius API Key") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = state.birdeyeApiKey,
-                    onValueChange = onBirdeyeApiKeyChange,
-                    label = { Text("Birdeye API Key") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                
                 Text(
-                    text = "Note: CryptoRank is deprecated in V3. DexScreener & RugCheck are free APIs and don't require keys.",
+                    text = "V4 Architecture Notice",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+                Text(
+                    text = "API Keys are no longer required. The app runs fully autonomous via DexScreener, RugCheck, and CoinGecko (Free Tier).",
                     color = androidx.compose.ui.graphics.Color.Gray,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 8.dp)
+                    fontSize = 14.sp
                 )
             }
         }

@@ -146,6 +146,15 @@ fun TokenCard(token: TokenEntity) {
                         fontSize = 12.sp
                     )
                     
+                    val ageMs = System.currentTimeMillis() - token.pairCreatedAt
+                    val ageHours = (ageMs / (1000 * 60 * 60)).toInt()
+                    val ageText = if (token.pairCreatedAt > 0) "Age: ${ageHours}h" else "Age: N/A"
+                    Text(
+                        text = ageText,
+                        color = Color.LightGray,
+                        fontSize = 12.sp
+                    )
+                    
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
                             text = if (token.isSafe) "SAFE" else "RISK",

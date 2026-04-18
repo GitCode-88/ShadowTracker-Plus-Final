@@ -19,17 +19,12 @@ import kotlinx.coroutines.launch
 
 data class ShadowSettingsState(
     val isWalModeEnabled: Boolean = true,
-    val liquidityFilterUsd: Float = 2000f,
-    val minFdvUsd: Float = 0f,
+    val liquidityFilterUsd: Float = 5000f,
+    val minFdvUsd: Float = 50000f,
     val timeSelection: String = "24H", // 1H, 6H, 24H
-    val minVolumeUsd: Float = 0f,
-    val minTxns: Float = 0f,
-    val minTraders: Float = 0f,
-    val maxAgeHours: Float = 720f, // Up to 30 days default
-    val maxPriceChangeFromAtl: Float = 500f, // in percentage
-    val heliusApiKey: String = "",
-    val birdeyeApiKey: String = "",
-    val cryptoRankApiKey: String = "", // Kept for compatibility/settings layout
+    val minVolumeUsd: Float = 1000f,
+    val minTxns: Float = 50f,
+    val maxPriceChangeFromAtl: Float = 500f, // in percentage (+% from bottom)
     val isScanning: Boolean = false
 )
 
@@ -75,7 +70,6 @@ class ShadowViewModel(
             
             val passesLiquidity = token.liquidityUsd >= settings.liquidityFilterUsd
             val passesFdv = token.marketCapUsd >= settings.minFdvUsd
-            val passesTraders = token.traders24h >= settings.minTraders
 
             // Handle time selection based filtering for volume and txns
             val (vol, txns) = when (settings.timeSelection) {
@@ -86,20 +80,17 @@ class ShadowViewModel(
             val passesVolume = vol >= settings.minVolumeUsd
             val passesTxns = txns >= settings.minTxns
 
-            // Age Check
-            val ageMs = System.currentTimeMillis() - token.pairCreatedAt
-            val ageHours = ageMs / (1000 * 60 * 60).toFloat()
-            val passesAge = ageHours <= settings.maxAgeHours
-
-            // ATL Check
-            val priceChangePercent = if (token.atlUsd > 0) {
-                ((token.priceUsd - token.atlUsd) / token.atlUsd) * 100.0
+            // ATL Check (Nur Token, die einen ATL gesetzt haben)
+            val passesAtlChange = if (token.atlUsd > 0) {
+                val change = ((token.priceUsd - token.atlUsd) / token.atlUsd) * 100.0
+                change <= settings.maxPriceChangeFromAtl
             } else {
-                0.0
+                // Tokens ohne gesetztes ATL (weil sie z.B. zu neu sind) werden von der "Price from ATL" Regel ausgeschlossen
+                // und passieren den Filter temporär NICHT, da wir ja gezielt etablierte "gefallene Engel" suchen.
+                false
             }
-            val passesAtlChange = priceChangePercent <= settings.maxPriceChangeFromAtl
             
-            passesLiquidity && passesVolume && passesFdv && passesTxns && passesTraders && passesAge && passesAtlChange
+            passesLiquidity && passesVolume && passesFdv && passesTxns && passesAtlChange
         }
     }.stateIn(
         scope = viewModelScope,
@@ -165,78 +156,55 @@ class ShadowViewModel(
     }
 
     private suspend fun workerHeliusScan() {
-        val heliusRaw = _settingsState.value.heliusApiKey
-        val birdeyeRaw = _settingsState.value.birdeyeApiKey
-        
-        val heliusKey = extractKey(heliusRaw)
-        val birdeyeKey = extractKey(birdeyeRaw)
+        // Renamed internally, this is now Worker A (DexScreener Latest Profile Discovery)
+        logDebug("Worker A (Discovery): Scanning DexScreener...")
+        try {
+            // Using a hacky but functional approach to fetch the latest tokens from DexScreener's public undocumented API
+            // For production, using the documented Search/Latest APIs is preferred if this endpoint fails.
+            val client = okhttp3.OkHttpClient()
+            val request = okhttp3.Request.Builder()
+                .url("https://api.dexscreener.com/token-profiles/latest/v1")
+                .build()
 
-        if (heliusKey.isBlank() && birdeyeKey.isBlank()) {
-            logDebug("Worker A (Discovery): Keys missing, skipping.")
-            return
-        }
-
-        logDebug("Worker A (Discovery): Scanning new mints...")
-        var foundTokens = false
-
-        // Try Helius first
-        if (heliusKey.isNotBlank()) {
-            try {
-                val params = mapOf("limit" to 20, "displayOptions" to mapOf("showFungible" to true))
-                val requestBody = HeliusRpcRequest(
-                    method = "searchAssets",
-                    params = params
-                )
-                val response = ApiProvider.heliusApi.searchAssets(heliusKey, requestBody)
-                val tokens = response.result?.items ?: emptyList()
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val jsonString = response.body?.string() ?: ""
+                val jsonArray = org.json.JSONArray(jsonString)
                 
-                for (item in tokens) {
-                    val mintAddress = item.id ?: continue
-                    insertNewToken(
-                        mintAddress = mintAddress,
-                        symbol = item.content?.metadata?.symbol ?: "UNKNOWN",
-                        name = item.content?.metadata?.name ?: "Unknown",
-                        isMutable = item.mutable ?: false
-                    )
+                var newTokensCount = 0
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    val chainId = obj.optString("chainId")
+                    
+                    if (chainId == "solana") {
+                        val mintAddress = obj.optString("tokenAddress")
+                        if (mintAddress.isNotBlank()) {
+                            val isNew = insertNewToken(
+                                mintAddress = mintAddress,
+                                symbol = "UNK", // Symbol will be populated by Worker B
+                                name = obj.optString("description").take(20), 
+                                isMutable = false // Handled later
+                            )
+                            if (isNew) newTokensCount++
+                        }
+                    }
                 }
-                foundTokens = true
-                logDebug("Worker A (Helius): OK. \${tokens.size} tokens.")
-            } catch (e: Exception) {
-                Log.e("ShadowViewModel", "Helius Error: \${e.message}")
-                logDebug("Worker A (Helius) Error: \${e.message?.take(20)}")
+                logDebug("Worker A (Discovery): OK. Added \$newTokensCount new Solana Mints.")
+            } else {
+                logDebug("Worker A: DexScreener Profile API failed \${response.code}")
             }
-        }
-
-        // Fallback to Birdeye Token List if Helius failed or wasn't provided
-        if (!foundTokens && birdeyeKey.isNotBlank()) {
-            try {
-                logDebug("Worker A (Birdeye Fallback): Fetching...")
-                val response = ApiProvider.birdeyeApi.getTokenList(apiKey = birdeyeKey)
-                val tokens = response.data?.tokens ?: emptyList()
-                
-                for (item in tokens) {
-                    val mintAddress = item.address ?: continue
-                    insertNewToken(
-                        mintAddress = mintAddress,
-                        symbol = item.symbol ?: "UNKNOWN",
-                        name = item.name ?: "Unknown",
-                        isMutable = true // Assume mutable if unknown from Birdeye
-                    )
-                }
-                logDebug("Worker A (Birdeye): OK. \${tokens.size} tokens.")
-            } catch (e: Exception) {
-                Log.e("ShadowViewModel", "Birdeye Discovery Error: \${e.message}")
-                logDebug("Worker A (Birdeye) Error: \${e.message?.take(20)}")
-            }
+        } catch (e: Exception) {
+            Log.e("ShadowViewModel", "Discovery Error: \${e.message}")
+            logDebug("Worker A Error: \${e.message?.take(20)}")
         }
     }
 
-    private suspend fun insertNewToken(mintAddress: String, symbol: String, name: String, isMutable: Boolean) {
+    private suspend fun insertNewToken(mintAddress: String, symbol: String, name: String, isMutable: Boolean): Boolean {
         val existingToken = tokenDao.getToken(mintAddress)
         if (existingToken == null) {
             val newToken = TokenEntity(
                 mintAddress = mintAddress,
-                name = name,
+                name = name.ifBlank { "Unknown" },
                 symbol = symbol,
                 liquidityUsd = 0.0,
                 priceUsd = 0.0,
@@ -257,12 +225,12 @@ class ShadowViewModel(
                 riskScore = 0
             )
             tokenDao.insertToken(newToken)
+            return true
         }
+        return false
     }
 
     private suspend fun workerDexScreenerScan() {
-        val birdeyeKey = extractKey(_settingsState.value.birdeyeApiKey)
-
         try {
             val tokensFlow = tokenDao.getAllTokens()
             var currentTokens: List<TokenEntity> = emptyList()
@@ -276,6 +244,41 @@ class ShadowViewModel(
             
             val chunks = currentTokens.chunked(30)
             logDebug("Worker B (Market Data): Updating \${currentTokens.size} tokens...")
+
+            // Helper to get true ATL if missing from DexScreener using CoinGecko (Free/Public search)
+            suspend fun fetchAtlFallback(symbol: String): Double {
+                try {
+                    val client = okhttp3.OkHttpClient()
+                    // Search for the coin ID
+                    val searchReq = okhttp3.Request.Builder()
+                        .url("https://api.coingecko.com/api/v3/search?query=\$symbol")
+                        .build()
+                    val searchRes = client.newCall(searchReq).execute()
+                    if (searchRes.isSuccessful) {
+                        val searchJson = org.json.JSONObject(searchRes.body?.string() ?: "{}")
+                        val coins = searchJson.optJSONArray("coins")
+                        if (coins != null && coins.length() > 0) {
+                            val coinId = coins.getJSONObject(0).optString("id")
+                            
+                            // Fetch coin details for ATL
+                            val detailsReq = okhttp3.Request.Builder()
+                                .url("https://api.coingecko.com/api/v3/coins/\$coinId")
+                                .build()
+                            val detailsRes = client.newCall(detailsReq).execute()
+                            if (detailsRes.isSuccessful) {
+                                val detailsJson = org.json.JSONObject(detailsRes.body?.string() ?: "{}")
+                                val marketData = detailsJson.optJSONObject("market_data")
+                                val atlObj = marketData?.optJSONObject("atl")
+                                val atlUsd = atlObj?.optDouble("usd") ?: 0.0
+                                return atlUsd
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Ignore CoinGecko rate limits/errors silently so we don't spam logs
+                }
+                return 0.0
+            }
 
             for (chunk in chunks) {
                 val addresses = chunk.joinToString(",") { it.mintAddress }
@@ -301,21 +304,24 @@ class ShadowViewModel(
                             val fdv = bestPair.fdv ?: 0.0
                             val createdAt = bestPair.pairCreatedAt ?: token.pairCreatedAt
                             
-                            val atl = if (token.atlUsd == 0.0 && price > 0.0) price else token.atlUsd
-                            val ath = if (price > token.athUsd) price else token.athUsd
-
-                            // Optional: Fetch Traders from Birdeye if Key is present
-                            var traders24h = token.traders24h
-                            if (birdeyeKey.isNotBlank()) {
-                                try {
-                                    val beResponse = ApiProvider.birdeyeApi.getTokenOverview(birdeyeKey, token.mintAddress)
-                                    traders24h = beResponse.data?.uniqueWallet24h ?: token.traders24h
-                                } catch (e: Exception) {
-                                    // Silently ignore individual birdeye fails to not spam log
+                            val symbol = bestPair.baseToken?.symbol ?: token.symbol
+                            
+                            // Get ATL. If currently 0, try CoinGecko Fallback. If that fails, set it to the first seen price.
+                            var atl = token.atlUsd
+                            if (atl == 0.0 && price > 0.0) {
+                                atl = fetchAtlFallback(symbol)
+                                if (atl == 0.0) {
+                                    atl = price // Set initial price as local ATL
                                 }
                             }
                             
+                            val ath = if (price > token.athUsd) price else token.athUsd
+                            val traders24h = token.traders24h
+                            val name = bestPair.baseToken?.name ?: token.name
+                            
                             val updatedToken = token.copy(
+                                name = name.ifBlank { "Unknown" },
+                                symbol = symbol,
                                 liquidityUsd = liq,
                                 priceUsd = price,
                                 volume1hUsd = vol1h,
@@ -407,12 +413,6 @@ class ShadowViewModel(
     fun updateMinTxns(value: Float) {
         _settingsState.update { it.copy(minTxns = value) }
     }
-    fun updateMinTraders(value: Float) {
-        _settingsState.update { it.copy(minTraders = value) }
-    }
-    fun updateMaxAgeHours(value: Float) {
-        _settingsState.update { it.copy(maxAgeHours = value) }
-    }
     fun updateMinFdv(value: Float) {
         _settingsState.update { it.copy(minFdvUsd = value) }
     }
@@ -421,14 +421,5 @@ class ShadowViewModel(
     }
     fun updateTimeSelection(selection: String) {
         _settingsState.update { it.copy(timeSelection = selection) }
-    }
-    fun updateHeliusApiKey(key: String) {
-        _settingsState.update { it.copy(heliusApiKey = key) }
-    }
-    fun updateBirdeyeApiKey(key: String) {
-        _settingsState.update { it.copy(birdeyeApiKey = key) }
-    }
-    fun updateCryptoRankApiKey(key: String) {
-        _settingsState.update { it.copy(cryptoRankApiKey = key) }
     }
 }

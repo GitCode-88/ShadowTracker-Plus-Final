@@ -39,11 +39,8 @@ fun FilterPanel(
     onTimeSelectionChange: (String) -> Unit,
     onMinVolumeChange: (Float) -> Unit,
     onMinTxnsChange: (Float) -> Unit,
-    onMinTradersChange: (Float) -> Unit,
-    onMaxAgeHoursChange: (Float) -> Unit,
     onMaxAtlChange: (Float) -> Unit,
     onForceScan: () -> Unit,
-    onNavigateSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -74,14 +71,6 @@ fun FilterPanel(
                 )
                 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    IconButton(onClick = onNavigateSettings) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Settings",
-                            tint = MatrixNeonGreen
-                        )
-                    }
-
                     Button(
                         onClick = onForceScan,
                         enabled = !state.isScanning,
@@ -190,28 +179,6 @@ fun FilterPanel(
                     )
                 }
                 
-                // Min Traders Slider
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(text = "Min Traders (24h): ${state.minTraders.roundToInt()}", color = Color.White, fontSize = 14.sp)
-                    Slider(
-                        value = state.minTraders,
-                        onValueChange = onMinTradersChange,
-                        valueRange = 0f..2000f,
-                        colors = SliderDefaults.colors(thumbColor = MatrixNeonGreen, activeTrackColor = MatrixNeonGreen)
-                    )
-                }
-                
-                // Max Age Slider
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(text = "Max Age (Hours): ${state.maxAgeHours.roundToInt()}", color = Color.White, fontSize = 14.sp)
-                    Slider(
-                        value = state.maxAgeHours,
-                        onValueChange = onMaxAgeHoursChange,
-                        valueRange = 1f..720f,
-                        colors = SliderDefaults.colors(thumbColor = MatrixNeonGreen, activeTrackColor = MatrixNeonGreen)
-                    )
-                }
-
                 // Max ATL Change Slider
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(text = "Max +% from ATL: ${state.maxPriceChangeFromAtl.roundToInt()}%", color = Color.White, fontSize = 14.sp)
