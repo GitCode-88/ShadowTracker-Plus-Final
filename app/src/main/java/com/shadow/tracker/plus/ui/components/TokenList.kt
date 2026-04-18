@@ -204,9 +204,14 @@ fun TokenCard(token: TokenEntity) {
                     )
                     
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        val safetyText = when {
+                            !token.isRugCheckComplete -> "⚠️ PEND"
+                            token.isSafe -> "SAFE 🛡️"
+                            else -> "RISK ❌"
+                        }
                         Text(
-                            text = if (token.isSafe) "SAFE" else "RISK",
-                            color = if (token.isSafe) MatrixNeonGreen else MatrixRed,
+                            text = safetyText,
+                            color = if (token.isSafe && token.isRugCheckComplete) MatrixNeonGreen else MatrixRed,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -243,7 +248,7 @@ fun TokenCard(token: TokenEntity) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://birdeye.so/token/\${token.mintAddress}?chain=solana"))
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://birdeye.so/token/${token.mintAddress}?chain=solana"))
                             context.startActivity(intent)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
@@ -255,7 +260,7 @@ fun TokenCard(token: TokenEntity) {
                     
                     Button(
                         onClick = {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://dexscreener.com/solana/\${token.mintAddress}"))
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://dexscreener.com/solana/${token.mintAddress}"))
                             context.startActivity(intent)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),

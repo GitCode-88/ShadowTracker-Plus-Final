@@ -66,6 +66,27 @@ fun SettingsScreen(
                     ),
                     placeholder = { Text("Enter Helius API Key") }
                 )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text(
+                    text = "Birdeye API Key (Optional)",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                OutlinedTextField(
+                    value = state.birdeyeApiKey,
+                    onValueChange = onBirdeyeApiKeyChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MatrixNeonGreen,
+                        unfocusedBorderColor = Color.Gray,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    placeholder = { Text("Enter Birdeye API Key") }
+                )
             }
         }
     }

@@ -100,22 +100,6 @@ fun FilterPanel(
             }
 
             if (expanded) {
-                // WAL-Mode Switch
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(text = "WAL-Mode (Performance Boost)", color = Color.White)
-                    Switch(
-                        checked = state.isWalModeEnabled,
-                        onCheckedChange = onWalModeChange,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = MatrixNeonGreen,
-                            checkedTrackColor = MatrixNeonGreen.copy(alpha = 0.3f)
-                        )
-                    )
-                }
 
 
 

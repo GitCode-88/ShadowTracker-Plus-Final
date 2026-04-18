@@ -27,7 +27,8 @@ data class ShadowSettingsState(
     val minTxns: Float = 50f,
     val maxPriceChangeFromAtl: Float = 500f, // in percentage (+% from bottom)
     val isScanning: Boolean = false,
-    val heliusApiKey: String = ""
+    val heliusApiKey: String = "",
+    val birdeyeApiKey: String = ""
 )
 
 class ShadowViewModel(
@@ -67,33 +68,30 @@ class ShadowViewModel(
         _settingsState
     ) { tokens, settings ->
         tokens.filter { token ->
-            // Hard safety filter first
+            // Security Fallback: Never hide tokens completely if safety check is pending, but drop immediately if PROVEN unsafe or mutable.
             if (!token.isSafe || token.isMutable == true) return@filter false
+            
+            // Age Filter: We only want "Fallen Giants", not pump.fun garbage.
+            // Exclude anything created in the last 7 days (7 * 24 * 60 * 60 * 1000 ms)
+            val minAgeMs = 7L * 24 * 60 * 60 * 1000
+            val ageMs = System.currentTimeMillis() - token.pairCreatedAt
+            if (ageMs < minAgeMs) return@filter false
             
             val passesLiquidity = token.liquidityUsd >= settings.liquidityFilterUsd
             val passesFdv = token.marketCapUsd >= settings.minFdvUsd
+            val passesVolume = token.volume24hUsd >= settings.minVolumeUsd
+            val passesTxns = token.txns24h >= settings.minTxns
 
-            // Handle time selection based filtering for volume and txns
-            val (vol, txns) = when (settings.timeSelection) {
-                "1H" -> token.volume1hUsd to token.txns1h
-                "6H" -> token.volume24hUsd to token.txns24h
-                else -> token.volume24hUsd to token.txns24h
-            }
-            val passesVolume = vol >= settings.minVolumeUsd
-            val passesTxns = txns >= settings.minTxns
-
-            // ATL Check (Nur Token, die einen ATL gesetzt haben)
-            val passesAtlChange = if (token.atlUsd > 0) {
+            val passesAtlChange = if (token.atlUsd > 0.0) {
                 val change = ((token.priceUsd - token.atlUsd) / token.atlUsd) * 100.0
                 change <= settings.maxPriceChangeFromAtl
             } else {
-                // Tokens ohne gesetztes ATL (weil sie z.B. zu neu sind) werden von der "Price from ATL" Regel ausgeschlossen
-                // und passieren den Filter temporär NICHT, da wir ja gezielt etablierte "gefallene Engel" suchen.
-                false
+                // ALLOW breathing if ATL is somehow not yet fully calculated but it passed the strict age test.
+                true
             }
             
             passesLiquidity && passesVolume && passesFdv && passesTxns && passesAtlChange
-        }
+        }.sortedByDescending { it.rvol ?: 0.0 }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
