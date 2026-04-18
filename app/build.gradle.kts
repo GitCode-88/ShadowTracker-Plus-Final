@@ -51,6 +51,11 @@ android {
 }
 
 dependencies {
+    // Technical Analysis Library (TA4J) for Choppiness & Math Models
+    implementation("org.ta4j:ta4j-core:0.15")
+
+    // We will keep Retrofit for Helius RPC (since kSol is highly fragmented/unstable on Maven)
+    // but abstract it strictly inside the ViewModel using a solid Factory.
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")

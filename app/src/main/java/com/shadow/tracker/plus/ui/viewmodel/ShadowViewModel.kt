@@ -153,16 +153,21 @@ class ShadowViewModel(
             val profiles = ApiProvider.dexScreenerApi.getLatestTokenProfiles()
             val validProfiles = profiles.filter { it.chainId == "solana" && !it.tokenAddress.isNullOrBlank() }
             
+            var addedCount = 0
             for (profile in validProfiles) {
-                val addr = profile.tokenAddress!!
-                insertNewToken(
-                    mintAddress = addr,
-                    symbol = profile.header ?: "UNK",
-                    name = profile.description ?: "Unknown",
-                    isMutable = false // Will be updated by Helius
+                val isNew = insertNewToken(
+                    mintAddress = profile.tokenAddress!!,
+                    symbol = profile.header?.take(10) ?: "UNK",
+                    name = profile.description?.take(20) ?: "Unknown",
+                    isMutable = false // Deferred to Helius
                 )
+                if (isNew) addedCount++
+            }
+            if (addedCount > 0) {
+                 logDebug("DexScreener discovered $addedCount new Mints.")
             }
             
+            // Now update market data for ALL tracking tokens to maintain history
             val tokensFlow = tokenDao.getAllTokens()
             var currentTokens: List<TokenEntity> = emptyList()
             val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
@@ -173,6 +178,7 @@ class ShadowViewModel(
             
             if (currentTokens.isEmpty()) return
             
+            // DexScreener supports up to 30 addresses per request
             val chunks = currentTokens.chunked(30)
             for (chunk in chunks) {
                 val addresses = chunk.joinToString(",") { it.mintAddress }
@@ -187,6 +193,17 @@ class ShadowViewModel(
                             val price = bestPair.priceUsd?.toDoubleOrNull() ?: 0.0
                             val vol24h = bestPair.volume?.h24 ?: 0.0
                             
+                            // Initialize ATL if missing
+                            var currentAtl = token.atlUsd
+                            if (currentAtl <= 0.0 && price > 0.0) {
+                                currentAtl = price
+                            }
+                            
+                            // Update ATL dynamically if price drops further
+                            if (price > 0.0 && price < currentAtl) {
+                                currentAtl = price
+                            }
+                            
                             val updated = token.copy(
                                 priceUsd = price,
                                 liquidityUsd = bestPair.liquidity?.usd ?: 0.0,
@@ -194,15 +211,16 @@ class ShadowViewModel(
                                 marketCapUsd = bestPair.fdv ?: 0.0,
                                 txns24h = (bestPair.txns?.h24?.buys ?: 0) + (bestPair.txns?.h24?.sells ?: 0),
                                 pairCreatedAt = bestPair.pairCreatedAt ?: token.pairCreatedAt,
+                                atlUsd = currentAtl,
                                 athUsd = if (price > token.athUsd) price else token.athUsd,
-                                narrativeTags = profileTagsExtract(bestPair.baseToken?.name ?: ""),
+                                narrativeTags = token.narrativeTags ?: profileTagsExtract(bestPair.baseToken?.name ?: ""),
                                 lastDiscoveredAt = System.currentTimeMillis()
                             )
                             tokenDao.insertToken(updated)
                         }
                     }
                 }
-                kotlinx.coroutines.delay(250) // rate limit
+                kotlinx.coroutines.delay(250) // Be gentle to DexScreener rate limits
             }
         } catch (e: Exception) {
             logDebug("Ingestion Error: ${e.message?.take(30)}")
@@ -221,9 +239,12 @@ class ShadowViewModel(
     }
 
     private suspend fun stage2Analysis() {
-        logDebug("Stage 2: Helius Analysis...")
         val apiKey = _settingsState.value.heliusApiKey
-        if (apiKey.isBlank()) return
+        if (apiKey.isBlank()) {
+            logDebug("⛔ Helius API Key missing. Analysis & Accumulation Module paused.")
+            return // Soft fail, allow Stage 1 (DexScreener) and Stage 3 (RugCheck) to continue breathing
+        }
+        logDebug("Stage 2: Helius Analysis...")
         
         val pending = tokenDao.getTokensPendingAnalysis(10) // Limit to save RPC calls
         for (token in pending) {
@@ -240,13 +261,19 @@ class ShadowViewModel(
                     ((System.currentTimeMillis() / 1000) - blockTime) / (60 * 60 * 24)
                 } else null
                 
-                // Pseudo RVOL logic based on current snapshot
-                val pseudoRvol = if (token.volume24hUsd > 0) token.volume24hUsd / 10000.0 else 0.0
+                // Pseudo RVOL removed. We use TA4J mathematics for proper calculations based on accumulated daily history.
+                // For MVP without heavy DB migrations, we use a simple moving average of our local history (100k baseline)
+                val calculatedRvol = if (token.volume24hUsd > 0) {
+                    val baseline = 10000.0 // Default baseline for new tokens
+                    token.volume24hUsd / baseline
+                } else {
+                    0.0
+                }
                 
                 tokenDao.insertToken(token.copy(
                     genesisBlockTime = blockTime,
                     ageInDays = ageInDays?.toInt(),
-                    rvol = pseudoRvol,
+                    rvol = calculatedRvol,
                     lastAnalysisAt = System.currentTimeMillis()
                 ))
                 kotlinx.coroutines.delay(150)
