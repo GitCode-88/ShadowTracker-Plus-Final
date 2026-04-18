@@ -33,14 +33,13 @@ import kotlin.math.roundToInt
 @Composable
 fun FilterPanel(
     state: ShadowSettingsState,
-    onWalModeChange: (Boolean) -> Unit,
     onLiquidityFilterChange: (Float) -> Unit,
     onMinFdvChange: (Float) -> Unit,
-    onTimeSelectionChange: (String) -> Unit,
     onMinVolumeChange: (Float) -> Unit,
     onMinTxnsChange: (Float) -> Unit,
     onMaxAtlChange: (Float) -> Unit,
     onForceScan: () -> Unit,
+    onNavigateToSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -71,6 +70,9 @@ fun FilterPanel(
                 )
                 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconButton(onClick = onNavigateToSettings) {
+                        Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings", tint = Color.Gray)
+                    }
                     Button(
                         onClick = onForceScan,
                         enabled = !state.isScanning,

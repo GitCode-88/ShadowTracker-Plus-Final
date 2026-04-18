@@ -55,21 +55,33 @@ fun ShadowTrackerApp(
     
     val navController = rememberNavController()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        FilterPanel(
-            state = settingsState,
-            onWalModeChange = viewModel::updateWalMode,
-            onLiquidityFilterChange = viewModel::updateLiquidityFilter,
-            onMinFdvChange = viewModel::updateMinFdv,
-            onTimeSelectionChange = viewModel::updateTimeSelection,
-            onMinVolumeChange = viewModel::updateMinVolume,
-            onMinTxnsChange = viewModel::updateMinTxns,
-            onMaxAtlChange = viewModel::updateMaxAtlChange,
-            onForceScan = viewModel::forceScan
-        )
+    NavHost(navController = navController, startDestination = "dashboard") {
+        composable("dashboard") {
+            Column(modifier = Modifier.fillMaxSize()) {
+                FilterPanel(
+                    state = settingsState,
+                    onLiquidityFilterChange = viewModel::updateLiquidityFilter,
+                    onMinFdvChange = viewModel::updateMinFdv,
+                    onMinVolumeChange = viewModel::updateMinVolume,
+                    onMinTxnsChange = viewModel::updateMinTxns,
+                    onMaxAtlChange = viewModel::updateMaxAtlChange,
+                    onForceScan = viewModel::forceScanNow,
+                    onNavigateToSettings = { navController.navigate("settings") }
+                )
+                
+                TokenList(tokens = tokens, modifier = Modifier.weight(1f))
+                
+                DebugLogList(logs = debugLogs)
+            }
+        }
         
-        TokenList(tokens = tokens, modifier = Modifier.weight(1f))
-        
-        DebugLogList(logs = debugLogs)
+        composable("settings") {
+            SettingsScreen(
+                state = settingsState,
+                onHeliusApiKeyChange = viewModel::updateHeliusApiKey,
+                onBirdeyeApiKeyChange = viewModel::updateBirdeyeApiKey,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
     }
 }

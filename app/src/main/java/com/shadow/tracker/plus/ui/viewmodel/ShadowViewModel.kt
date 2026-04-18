@@ -75,7 +75,10 @@ class ShadowViewModel(
             // Exclude anything created in the last 7 days (7 * 24 * 60 * 60 * 1000 ms)
             val minAgeMs = 7L * 24 * 60 * 60 * 1000
             val ageMs = System.currentTimeMillis() - token.pairCreatedAt
-            if (ageMs < minAgeMs) return@filter false
+            if (ageMs < minAgeMs) {
+                // Note: We don't log here because this runs hundreds of times a second per UI redraw.
+                return@filter false
+            }
             
             val passesLiquidity = token.liquidityUsd >= settings.liquidityFilterUsd
             val passesFdv = token.marketCapUsd >= settings.minFdvUsd
@@ -148,21 +151,22 @@ class ShadowViewModel(
     private suspend fun stage1Ingestion() {
         logDebug("Stage 1: DexScreener Ingestion...")
         try {
-            val profiles = ApiProvider.dexScreenerApi.getLatestTokenProfiles()
-            val validProfiles = profiles.filter { it.chainId == "solana" && !it.tokenAddress.isNullOrBlank() }
-            
+            // Search for established Solana pairs to find older fallen giants, not just "Latest Profiles"
+            val searchResponse = ApiProvider.dexScreenerApi.searchPairs("solana")
             var addedCount = 0
-            for (profile in validProfiles) {
+            
+            searchResponse.pairs?.filter { it.baseToken?.address != null }?.forEach { pair ->
                 val isNew = insertNewToken(
-                    mintAddress = profile.tokenAddress!!,
-                    symbol = profile.header?.take(10) ?: "UNK",
-                    name = profile.description?.take(20) ?: "Unknown",
+                    mintAddress = pair.baseToken!!.address!!,
+                    symbol = pair.baseToken.symbol?.take(10) ?: "UNK",
+                    name = pair.baseToken.name?.take(20) ?: "Unknown",
                     isMutable = false // Deferred to Helius
                 )
                 if (isNew) addedCount++
             }
+            
             if (addedCount > 0) {
-                 logDebug("DexScreener discovered $addedCount new Mints.")
+                 logDebug("DexScreener discovered $addedCount established Mints.")
             }
             
             // Now update market data for ALL tracking tokens to maintain history
@@ -239,7 +243,7 @@ class ShadowViewModel(
     private suspend fun stage2Analysis() {
         val apiKey = _settingsState.value.heliusApiKey
         if (apiKey.isBlank()) {
-            logDebug("⛔ Helius API Key missing. Analysis & Accumulation Module paused.")
+            logDebug("⚠️ WARNING: Helius API Key missing! Open Settings (⚙️) to enter key. Analysis Module paused.")
             return // Soft fail, allow Stage 1 (DexScreener) and Stage 3 (RugCheck) to continue breathing
         }
         logDebug("Stage 2: Helius Analysis...")
@@ -426,6 +430,14 @@ private suspend fun insertNewToken(mintAddress: String, symbol: String, name: St
     }
     fun updateMaxAtlChange(value: Float) {
         _settingsState.update { it.copy(maxPriceChangeFromAtl = value) }
+    }
+    
+    fun updateHeliusApiKey(key: String) {
+        _settingsState.update { it.copy(heliusApiKey = key) }
+    }
+    
+    fun updateBirdeyeApiKey(key: String) {
+        _settingsState.update { it.copy(birdeyeApiKey = key) }
     }
     fun updateTimeSelection(selection: String) {
         _settingsState.update { it.copy(timeSelection = selection) }
