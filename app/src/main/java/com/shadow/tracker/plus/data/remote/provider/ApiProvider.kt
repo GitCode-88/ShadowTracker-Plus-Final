@@ -2,7 +2,9 @@ package com.shadow.tracker.plus.data.remote.provider
 
 import com.shadow.tracker.plus.data.remote.BirdeyeApi
 import com.shadow.tracker.plus.data.remote.CryptoRankApi
+import com.shadow.tracker.plus.data.remote.DexScreenerApi
 import com.shadow.tracker.plus.data.remote.HeliusApi
+import com.shadow.tracker.plus.data.remote.RugCheckApi
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -26,6 +28,12 @@ object ApiProvider {
 
     // CryptoRank Base URL
     private const val CRYPTORANK_BASE_URL = "https://api.cryptorank.io/v1/"
+
+    // DexScreener Base URL
+    private const val DEXSCREENER_BASE_URL = "https://api.dexscreener.com/latest/dex/"
+
+    // RugCheck Base URL
+    private const val RUGCHECK_BASE_URL = "https://api.rugcheck.xyz/v1/"
 
     val heliusApi: HeliusApi by lazy {
         Retrofit.Builder()
@@ -52,5 +60,23 @@ object ApiProvider {
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(CryptoRankApi::class.java)
+    }
+
+    val dexScreenerApi: DexScreenerApi by lazy {
+        Retrofit.Builder()
+            .baseUrl(DEXSCREENER_BASE_URL)
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(DexScreenerApi::class.java)
+    }
+
+    val rugCheckApi: RugCheckApi by lazy {
+        Retrofit.Builder()
+            .baseUrl(RUGCHECK_BASE_URL)
+            .client(okHttpClient)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(RugCheckApi::class.java)
     }
 }

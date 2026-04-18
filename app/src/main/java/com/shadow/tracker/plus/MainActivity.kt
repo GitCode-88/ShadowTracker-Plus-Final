@@ -55,6 +55,7 @@ fun ShadowTrackerApp(
             onWalModeChange = viewModel::updateWalMode,
             onLiquidityFilterChange = viewModel::updateLiquidityFilter,
             onMinVolumeChange = viewModel::updateMinVolume,
+            onMinFdvChange = viewModel::updateMinFdv,
             onMaxAtlChange = viewModel::updateMaxAtlChange,
             onHeliusApiKeyChange = viewModel::updateHeliusApiKey,
             onBirdeyeApiKeyChange = viewModel::updateBirdeyeApiKey,

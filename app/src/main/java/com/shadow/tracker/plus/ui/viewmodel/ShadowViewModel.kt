@@ -21,6 +21,7 @@ data class ShadowSettingsState(
     val isWalModeEnabled: Boolean = true,
     val liquidityFilterUsd: Float = 2000f,
     val minVolume24hUsd: Float = 0f,
+    val minFdvUsd: Float = 0f,
     val maxPriceChangeFromAtl: Float = 500f, // in percentage
     val heliusApiKey: String = "",
     val birdeyeApiKey: String = "",
@@ -54,8 +55,12 @@ class ShadowViewModel(
         _settingsState
     ) { tokens, settings ->
         tokens.filter { token ->
+            // Hard safety filter first
+            if (!token.isSafe) return@filter false
+            
             val passesLiquidity = token.liquidityUsd >= settings.liquidityFilterUsd
             val passesVolume = token.volume24hUsd >= settings.minVolume24hUsd
+            val passesFdv = token.marketCapUsd >= settings.minFdvUsd
             
             val priceChangePercent = if (token.atlUsd > 0) {
                 ((token.priceUsd - token.atlUsd) / token.atlUsd) * 100.0
@@ -64,7 +69,7 @@ class ShadowViewModel(
             }
             val passesAtlChange = priceChangePercent <= settings.maxPriceChangeFromAtl
             
-            passesLiquidity && passesVolume && passesAtlChange
+            passesLiquidity && passesVolume && passesFdv && passesAtlChange
         }
     }.stateIn(
         scope = viewModelScope,
@@ -87,23 +92,23 @@ class ShadowViewModel(
             }
         }
 
-        // Worker B: Birdeye (Liquidity & Price Updater)
+        // Worker B: DexScreener (Market Data Updater)
         viewModelScope.launch {
             while (true) {
                 if (!scanCooldownActive) {
-                    workerBirdeyeScan()
+                    workerDexScreenerScan()
                 }
                 delay(10000) // Poll every 10 seconds
             }
         }
 
-        // Worker C: CryptoRank (ATL Updater)
+        // Worker C: RugCheck (Security Scanner)
         viewModelScope.launch {
             while (true) {
                 if (!scanCooldownActive) {
-                    workerCryptoRankScan(forceRefresh = false)
+                    workerRugCheckScan()
                 }
-                delay(60000) // Poll every 60 seconds
+                delay(15000) // Poll every 15 seconds
             }
         }
     }
@@ -116,12 +121,12 @@ class ShadowViewModel(
             
             // Execute all workers concurrently for force scan
             val heliusJob = launch { workerHeliusScan() }
-            val birdeyeJob = launch { workerBirdeyeScan() }
-            val cryptoRankJob = launch { workerCryptoRankScan(forceRefresh = true) }
+            val dexScreenerJob = launch { workerDexScreenerScan() }
+            val rugCheckJob = launch { workerRugCheckScan() }
             
             heliusJob.join()
-            birdeyeJob.join()
-            cryptoRankJob.join()
+            dexScreenerJob.join()
+            rugCheckJob.join()
             
             _settingsState.update { it.copy(isScanning = false) }
             delay(3000) // 3 seconds cooldown
@@ -165,9 +170,12 @@ class ShadowViewModel(
                         symbol = symbol,
                         liquidityUsd = 0.0,
                         priceUsd = 0.0,
+                        marketCapUsd = 0.0,
+                        volume24hUsd = 0.0,
+                        txns24h = 0,
+                        pairCreatedAt = 0L,
                         atlUsd = 0.0,
                         athUsd = 0.0,
-                        volume24hUsd = 0.0,
                         atlLastUpdated = 0L,
                         isSafe = true,
                         isMutable = isMutable,
@@ -183,17 +191,9 @@ class ShadowViewModel(
         }
     }
 
-    private suspend fun workerBirdeyeScan() {
-        val birdeyeKey = _settingsState.value.birdeyeApiKey
-        if (birdeyeKey.isBlank()) {
-            logDebug("Worker B (Birdeye): Key missing, skipping.")
-            return
-        }
-
+    private suspend fun workerDexScreenerScan() {
         try {
-            // Get all tokens from local DB to update them. In a real app, you might want to paginate or filter.
             val tokensFlow = tokenDao.getAllTokens()
-            // We need a single snapshot of current tokens
             var currentTokens: List<TokenEntity> = emptyList()
             val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 tokensFlow.collect { currentTokens = it }
@@ -202,40 +202,59 @@ class ShadowViewModel(
             job.cancel()
             
             if (currentTokens.isEmpty()) return
-            logDebug("Worker B (Birdeye): Updating \${currentTokens.size} tokens...")
+            
+            // DexScreener allows up to 30 addresses per request separated by commas
+            val chunks = currentTokens.chunked(30)
+            
+            logDebug("Worker B (DexScreener): Updating \${currentTokens.size} tokens...")
 
-            for (token in currentTokens) {
+            for (chunk in chunks) {
+                val addresses = chunk.joinToString(",") { it.mintAddress }
                 try {
-                    val response = ApiProvider.birdeyeApi.getTokenOverview(birdeyeKey, token.mintAddress)
-                    val liq = response.data?.liquidity ?: 0.0
-                    val price = response.data?.price ?: 0.0
-                    val vol = response.data?.v24hUSD ?: 0.0
+                    val response = ApiProvider.dexScreenerApi.getTokens(addresses)
+                    val pairs = response.pairs ?: emptyList()
                     
-                    val updatedToken = token.copy(
-                        liquidityUsd = liq,
-                        priceUsd = price,
-                        volume24hUsd = vol
-                    )
-                    tokenDao.insertToken(updatedToken)
+                    // Update tokens with the best pair (usually the first one returned for that token)
+                    for (token in chunk) {
+                        val bestPair = pairs.firstOrNull { it.baseToken?.address == token.mintAddress }
+                        if (bestPair != null) {
+                            val liq = bestPair.liquidity?.usd ?: 0.0
+                            val priceStr = bestPair.priceUsd ?: "0"
+                            val price = priceStr.toDoubleOrNull() ?: 0.0
+                            val vol = bestPair.volume?.h24 ?: 0.0
+                            val txns = (bestPair.txns?.h24?.buys ?: 0) + (bestPair.txns?.h24?.sells ?: 0)
+                            val fdv = bestPair.fdv ?: 0.0
+                            val createdAt = bestPair.pairCreatedAt ?: 0L
+                            
+                            // Emulate ATL behavior using price history or initial price tracking
+                            // For simplicity, if atlUsd is 0, we set it to current price as initial baseline
+                            val atl = if (token.atlUsd == 0.0 && price > 0.0) price else token.atlUsd
+                            
+                            val updatedToken = token.copy(
+                                liquidityUsd = liq,
+                                priceUsd = price,
+                                volume24hUsd = vol,
+                                marketCapUsd = fdv,
+                                txns24h = txns,
+                                pairCreatedAt = createdAt,
+                                atlUsd = atl
+                            )
+                            tokenDao.insertToken(updatedToken)
+                        }
+                    }
                 } catch (e: Exception) {
-                    Log.e("ShadowViewModel", "Worker B (Birdeye) failed for \${token.symbol}: \${e.message}")
-                    logDebug("Worker B (Birdeye): Error for \${token.symbol}")
+                    Log.e("ShadowViewModel", "Worker B (DexScreener) chunk failed: \${e.message}")
+                    logDebug("Worker B (DexScreener): Error fetching chunk")
                 }
             }
-            logDebug("Worker B (Birdeye): OK.")
+            logDebug("Worker B (DexScreener): OK.")
         } catch (e: Exception) {
-            Log.e("ShadowViewModel", "Worker B (Birdeye) Error: \${e.message}")
-            logDebug("Worker B (Birdeye): Global Error \${e.message?.take(20)}...")
+            Log.e("ShadowViewModel", "Worker B (DexScreener) Error: \${e.message}")
+            logDebug("Worker B (DexScreener): Global Error \${e.message?.take(20)}...")
         }
     }
 
-    private suspend fun workerCryptoRankScan(forceRefresh: Boolean) {
-        val cryptoRankKey = _settingsState.value.cryptoRankApiKey
-        if (cryptoRankKey.isBlank()) {
-            logDebug("Worker C (CryptoRank): Key missing, skipping.")
-            return
-        }
-
+    private suspend fun workerRugCheckScan() {
         try {
             val tokensFlow = tokenDao.getAllTokens()
             var currentTokens: List<TokenEntity> = emptyList()
@@ -245,50 +264,43 @@ class ShadowViewModel(
             delay(100) // Wait for snapshot
             job.cancel()
 
-            val now = System.currentTimeMillis()
-            var checkedCount = 0
+            // Only check tokens that haven't been marked unsafe yet and haven't got a risk score
+            // In a real app we would cache the "last checked" timestamp for RugCheck too
+            val tokensToCheck = currentTokens.filter { it.isSafe && it.riskScore == 0 }
+            
+            if (tokensToCheck.isEmpty()) return
+            logDebug("Worker C (RugCheck): Checking \${tokensToCheck.size} tokens...")
 
-            for (token in currentTokens) {
-                // Only update if older than 24 hours or forced
-                val needsUpdate = forceRefresh || (now - token.atlLastUpdated > 24 * 60 * 60 * 1000)
-                if (needsUpdate) {
-                    checkedCount++
-                    try {
-                        val coinsResponse = ApiProvider.cryptoRankApi.getCoins(cryptoRankKey, token.symbol)
-                        val coinData = coinsResponse.data?.firstOrNull { it.symbol.equals(token.symbol, ignoreCase = true) }
-                        
-                        if (coinData != null) {
-                            val priceResponse = ApiProvider.cryptoRankApi.getPrice(cryptoRankKey, coinData.id.toString())
-                            val atl = priceResponse.data?.get(coinData.id.toString())?.atlPrice?.usd
-                            val ath = priceResponse.data?.get(coinData.id.toString())?.athPrice?.usd
-                            
-                            val updatedToken = token.copy(
-                                atlUsd = atl ?: token.atlUsd,
-                                athUsd = ath ?: token.athUsd,
-                                atlLastUpdated = now
-                            )
-                            tokenDao.insertToken(updatedToken)
-                        } else {
-                            // Coin not found on CryptoRank. Update timestamp to avoid hammering API.
-                            val updatedToken = token.copy(atlLastUpdated = now)
-                            tokenDao.insertToken(updatedToken)
-                        }
-                    } catch (e: Exception) {
-                        Log.e("ShadowViewModel", "Worker C (CryptoRank) failed for \${token.symbol}: \${e.message}")
-                        logDebug("Worker C (CryptoRank): Error for \${token.symbol}")
-                        
-                        // Also update timestamp on generic errors to enforce cooldown
-                        val updatedToken = token.copy(atlLastUpdated = now)
-                        tokenDao.insertToken(updatedToken)
+            for (token in tokensToCheck) {
+                try {
+                    val response = ApiProvider.rugCheckApi.getReportSummary(token.mintAddress)
+                    val score = response.score ?: 0
+                    
+                    // Hard rule: if Score > 5000 or contains a "danger" risk, mark as unsafe
+                    val hasDanger = response.risks?.any { it.level == "danger" } ?: false
+                    val isSafe = score < 5000 && !hasDanger
+                    
+                    val updatedToken = token.copy(
+                        riskScore = score,
+                        isSafe = isSafe
+                    )
+                    tokenDao.insertToken(updatedToken)
+                    
+                    if (!isSafe) {
+                        logDebug("Worker C (RugCheck): \${token.symbol} is DANGEROUS!")
                     }
+                    
+                    // Throttle requests to not hit rate limits on RugCheck
+                    delay(1000)
+                } catch (e: Exception) {
+                    Log.e("ShadowViewModel", "Worker C (RugCheck) failed for \${token.symbol}: \${e.message}")
+                    // Don't log spam for 404s (some valid tokens just aren't scanned yet)
                 }
             }
-            if (checkedCount > 0) {
-                logDebug("Worker C (CryptoRank): OK. Updated \$checkedCount tokens.")
-            }
+            logDebug("Worker C (RugCheck): OK.")
         } catch (e: Exception) {
-            Log.e("ShadowViewModel", "Worker C (CryptoRank) Error: \${e.message}")
-            logDebug("Worker C (CryptoRank): Global Error \${e.message?.take(20)}...")
+            Log.e("ShadowViewModel", "Worker C (RugCheck) Error: \${e.message}")
+            logDebug("Worker C (RugCheck): Global Error \${e.message?.take(20)}...")
         }
     }
 
@@ -300,6 +312,9 @@ class ShadowViewModel(
     }
     fun updateMinVolume(value: Float) {
         _settingsState.update { it.copy(minVolume24hUsd = value) }
+    }
+    fun updateMinFdv(value: Float) {
+        _settingsState.update { it.copy(minFdvUsd = value) }
     }
     fun updateMaxAtlChange(value: Float) {
         _settingsState.update { it.copy(maxPriceChangeFromAtl = value) }

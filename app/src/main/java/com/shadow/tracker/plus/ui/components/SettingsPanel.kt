@@ -31,6 +31,7 @@ fun SettingsPanel(
     onWalModeChange: (Boolean) -> Unit,
     onLiquidityFilterChange: (Float) -> Unit,
     onMinVolumeChange: (Float) -> Unit,
+    onMinFdvChange: (Float) -> Unit,
     onMaxAtlChange: (Float) -> Unit,
     onHeliusApiKeyChange: (String) -> Unit,
     onBirdeyeApiKeyChange: (String) -> Unit,
@@ -135,6 +136,24 @@ fun SettingsPanel(
                     value = state.minVolume24hUsd,
                     onValueChange = onMinVolumeChange,
                     valueRange = 0f..500000f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = MatrixNeonGreen,
+                        activeTrackColor = MatrixNeonGreen
+                    )
+                )
+            }
+
+            // Min FDV Slider
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Min FDMC/MCap: \$${state.minFdvUsd.roundToInt()}",
+                    color = Color.White,
+                    fontSize = 14.sp
+                )
+                Slider(
+                    value = state.minFdvUsd,
+                    onValueChange = onMinFdvChange,
+                    valueRange = 0f..1000000f,
                     colors = SliderDefaults.colors(
                         thumbColor = MatrixNeonGreen,
                         activeTrackColor = MatrixNeonGreen

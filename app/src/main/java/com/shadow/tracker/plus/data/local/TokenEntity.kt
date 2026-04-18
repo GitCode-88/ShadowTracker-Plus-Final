@@ -10,10 +10,13 @@ data class TokenEntity(
     val symbol: String,
     val liquidityUsd: Double,
     val priceUsd: Double,
+    val marketCapUsd: Double, // fdv
+    val volume24hUsd: Double,
+    val txns24h: Int,
+    val pairCreatedAt: Long, // timestamp
     val atlUsd: Double,
     val athUsd: Double,
-    val volume24hUsd: Double,
-    val atlLastUpdated: Long, // Timestamp in milliseconds
+    val atlLastUpdated: Long, // timestamp
     val isSafe: Boolean,
     val isMutable: Boolean,
     val riskScore: Int
