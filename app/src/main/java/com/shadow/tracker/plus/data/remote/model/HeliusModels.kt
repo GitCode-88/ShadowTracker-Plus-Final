@@ -6,13 +6,68 @@ data class HeliusRpcRequest(
     @SerializedName("jsonrpc") val jsonrpc: String = "2.0",
     @SerializedName("id") val id: String = "1",
     @SerializedName("method") val method: String,
-    @SerializedName("params") val params: Map<String, Any>
+    @SerializedName("params") val params: Any
 )
 
 data class HeliusRpcResponse(
     @SerializedName("jsonrpc") val jsonrpc: String?,
     @SerializedName("id") val id: String?,
     @SerializedName("result") val result: HeliusAssetResult?
+)
+
+data class HeliusBlockTimeResponse(
+    @SerializedName("jsonrpc") val jsonrpc: String?,
+    @SerializedName("id") val id: String?,
+    @SerializedName("result") val result: Long? // timestamp in seconds
+)
+
+data class HeliusSignaturesResponse(
+    @SerializedName("jsonrpc") val jsonrpc: String?,
+    @SerializedName("id") val id: String?,
+    @SerializedName("result") val result: List<HeliusSignature>?
+)
+
+data class HeliusSignature(
+    @SerializedName("signature") val signature: String?,
+    @SerializedName("slot") val slot: Long?,
+    @SerializedName("err") val err: Any?,
+    @SerializedName("memo") val memo: String?,
+    @SerializedName("blockTime") val blockTime: Long?
+)
+
+data class HeliusTokenAccountsResponse(
+    @SerializedName("jsonrpc") val jsonrpc: String?,
+    @SerializedName("id") val id: String?,
+    @SerializedName("result") val result: HeliusTokenAccountsResult?
+)
+
+data class HeliusTokenAccountsResult(
+    @SerializedName("value") val value: List<HeliusTokenAccountValue>?
+)
+
+data class HeliusTokenAccountValue(
+    @SerializedName("pubkey") val pubkey: String?,
+    @SerializedName("account") val account: HeliusTokenAccountData?
+)
+
+data class HeliusTokenAccountData(
+    @SerializedName("data") val data: HeliusTokenAccountParsedData?
+)
+
+data class HeliusTokenAccountParsedData(
+    @SerializedName("parsed") val parsed: HeliusTokenAccountParsedInfo?
+)
+
+data class HeliusTokenAccountParsedInfo(
+    @SerializedName("info") val info: HeliusTokenAccountInfoDetails?
+)
+
+data class HeliusTokenAccountInfoDetails(
+    @SerializedName("tokenAmount") val tokenAmount: HeliusTokenAmount?
+)
+
+data class HeliusTokenAmount(
+    @SerializedName("uiAmount") val uiAmount: Double?
 )
 
 data class HeliusAssetResult(

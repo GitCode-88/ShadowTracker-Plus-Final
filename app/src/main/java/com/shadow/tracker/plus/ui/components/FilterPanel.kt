@@ -117,23 +117,7 @@ fun FilterPanel(
                     )
                 }
 
-                // Time Selection
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    listOf("1H", "6H", "24H").forEach { time ->
-                        FilterChip(
-                            selected = state.timeSelection == time,
-                            onClick = { onTimeSelectionChange(time) },
-                            label = { Text(time) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MatrixNeonGreen.copy(alpha = 0.2f),
-                                selectedLabelColor = MatrixNeonGreen
-                            )
-                        )
-                    }
-                }
+
 
                 // Liquidity Filter Slider
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -148,7 +132,7 @@ fun FilterPanel(
 
                 // Min Volume Slider
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(text = "Min Volume (${state.timeSelection}): \$${state.minVolumeUsd.roundToInt()}", color = Color.White, fontSize = 14.sp)
+                    Text(text = "Min Volume (24H): \$${state.minVolumeUsd.roundToInt()}", color = Color.White, fontSize = 14.sp)
                     Slider(
                         value = state.minVolumeUsd,
                         onValueChange = onMinVolumeChange,
@@ -170,7 +154,7 @@ fun FilterPanel(
                 
                 // Min Txns Slider
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(text = "Min TXNS (${state.timeSelection}): ${state.minTxns.roundToInt()}", color = Color.White, fontSize = 14.sp)
+                    Text(text = "Min TXNS (24H): ${state.minTxns.roundToInt()}", color = Color.White, fontSize = 14.sp)
                     Slider(
                         value = state.minTxns,
                         onValueChange = onMinTxnsChange,
@@ -190,7 +174,7 @@ fun FilterPanel(
                     )
                 }
             } else {
-                 Text(text = "Click to expand filters (${state.timeSelection})", color = Color.Gray, fontSize = 12.sp)
+                 Text(text = "Click to expand filters ", color = Color.Gray, fontSize = 12.sp)
             }
         }
     }

@@ -6,6 +6,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.background
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -97,13 +99,32 @@ fun TokenCard(token: TokenEntity) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column {
-                    Text(
-                        text = token.name,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text(
+                            text = token.name,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                        if (!token.narrativeTags.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            androidx.compose.foundation.layout.Box(
+                                modifier = Modifier
+                                    .background(MatrixNeonGreen.copy(alpha = 0.2f), androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = token.narrativeTags ?: "",
+                                    color = MatrixNeonGreen,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                     Text(
                         text = token.symbol,
                         color = Color.LightGray,
@@ -115,6 +136,33 @@ fun TokenCard(token: TokenEntity) {
                         color = Color.White,
                         fontSize = 12.sp
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                         Text(
+                            text = "CA: ${token.mintAddress.take(4)}...${token.mintAddress.takeLast(4)}",
+                            color = MatrixNeonGreen,
+                            fontSize = 10.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        androidx.compose.material.icons.Icons.Default?.let {
+                             androidx.compose.material3.IconButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    val clip = android.content.ClipData.newPlainText("Contract Address", token.mintAddress)
+                                    clipboard.setPrimaryClip(clip)
+                                    android.widget.Toast.makeText(context, "CA copied!", android.widget.Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(16.dp)
+                            ) {
+                                androidx.compose.material3.Icon(
+                                    imageVector = androidx.compose.material.icons.Icons.Default.Info, // Using Share as generic placeholder for copy if copy not available
+                                    contentDescription = "Copy CA",
+                                    tint = MatrixNeonGreen
+                                )
+                            }
+                        }
+                    }
                 }
                 Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                     Text(
@@ -163,8 +211,8 @@ fun TokenCard(token: TokenEntity) {
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = if (token.isMutable) "[MUTABLE]" else "[LOCKED]",
-                            color = if (token.isMutable) MatrixRed else MatrixNeonGreen,
+                            text = if (token.isMutable == true) "[MUTABLE]" else "[LOCKED]",
+                            color = if (token.isMutable == true) MatrixRed else MatrixNeonGreen,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )

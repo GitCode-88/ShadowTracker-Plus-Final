@@ -66,7 +66,7 @@ class ShadowViewModel(
     ) { tokens, settings ->
         tokens.filter { token ->
             // Hard safety filter first
-            if (!token.isSafe || token.isMutable) return@filter false
+            if (!token.isSafe || token.isMutable == true) return@filter false
             
             val passesLiquidity = token.liquidityUsd >= settings.liquidityFilterUsd
             val passesFdv = token.marketCapUsd >= settings.minFdvUsd
@@ -74,7 +74,7 @@ class ShadowViewModel(
             // Handle time selection based filtering for volume and txns
             val (vol, txns) = when (settings.timeSelection) {
                 "1H" -> token.volume1hUsd to token.txns1h
-                "6H" -> token.volume6hUsd to token.txns6h
+                "6H" -> token.volume24hUsd to token.txns24h
                 else -> token.volume24hUsd to token.txns24h
             }
             val passesVolume = vol >= settings.minVolumeUsd
@@ -210,19 +210,31 @@ class ShadowViewModel(
                 priceUsd = 0.0,
                 marketCapUsd = 0.0,
                 volume1hUsd = 0.0,
-                volume6hUsd = 0.0,
                 volume24hUsd = 0.0,
                 txns1h = 0,
-                txns6h = 0,
                 txns24h = 0,
-                traders24h = 0,
                 pairCreatedAt = System.currentTimeMillis(),
+                genesisBlockTime = null,
                 atlUsd = 0.0,
                 athUsd = 0.0,
-                atlLastUpdated = 0L,
+                ageInDays = null,
+                rvol = null,
+                proximityToAtl = null,
+                choppinessIndex = null,
+                dormancyDays = null,
+                isRugCheckComplete = false,
                 isSafe = true,
+                mintAuthorityRevoked = null,
+                freezeAuthorityRevoked = null,
                 isMutable = isMutable,
-                riskScore = 0
+                narrativeTags = null,
+                isSmartMoneyAccumulating = null,
+                lpLockedPct = null,
+                top10HolderPct = null,
+                riskScore = 0,
+                lastDiscoveredAt = System.currentTimeMillis(),
+                lastAnalysisAt = 0L,
+                lastRugCheckAt = 0L
             )
             tokenDao.insertToken(newToken)
             return true
@@ -316,7 +328,7 @@ class ShadowViewModel(
                             }
                             
                             val ath = if (price > token.athUsd) price else token.athUsd
-                            val traders24h = token.traders24h
+                            
                             val name = bestPair.baseToken?.name ?: token.name
                             
                             val updatedToken = token.copy(
@@ -325,13 +337,13 @@ class ShadowViewModel(
                                 liquidityUsd = liq,
                                 priceUsd = price,
                                 volume1hUsd = vol1h,
-                                volume6hUsd = vol6h,
+                                
                                 volume24hUsd = vol24h,
                                 marketCapUsd = fdv,
                                 txns1h = txns1h,
-                                txns6h = txns6h,
+                                
                                 txns24h = txns24h,
-                                traders24h = traders24h,
+                                
                                 pairCreatedAt = createdAt,
                                 atlUsd = atl,
                                 athUsd = ath

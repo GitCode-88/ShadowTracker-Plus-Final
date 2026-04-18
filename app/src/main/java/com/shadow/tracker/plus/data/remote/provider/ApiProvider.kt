@@ -30,7 +30,7 @@ object ApiProvider {
     private const val CRYPTORANK_BASE_URL = "https://api.cryptorank.io/v1/"
 
     // DexScreener Base URL
-    private const val DEXSCREENER_BASE_URL = "https://api.dexscreener.com/latest/dex/"
+    private const val DEXSCREENER_BASE_URL = "https://api.dexscreener.com/"
 
     // RugCheck Base URL
     private const val RUGCHECK_BASE_URL = "https://api.rugcheck.xyz/v1/"
