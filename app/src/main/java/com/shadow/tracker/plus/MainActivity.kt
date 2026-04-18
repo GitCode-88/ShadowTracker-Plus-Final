@@ -12,8 +12,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.shadow.tracker.plus.data.local.AppDatabase
-import com.shadow.tracker.plus.ui.components.SettingsPanel
+import com.shadow.tracker.plus.ui.components.FilterPanel
+import com.shadow.tracker.plus.ui.components.SettingsScreen
 import com.shadow.tracker.plus.ui.components.TokenList
 import com.shadow.tracker.plus.ui.components.DebugLogList
 import com.shadow.tracker.plus.ui.theme.ShadowTrackerPlusTheme
@@ -48,23 +52,39 @@ fun ShadowTrackerApp(
     val settingsState by viewModel.settingsState.collectAsState()
     val tokens by viewModel.filteredTokens.collectAsState()
     val debugLogs by viewModel.debugLogs.collectAsState()
+    
+    val navController = rememberNavController()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        SettingsPanel(
-            state = settingsState,
-            onWalModeChange = viewModel::updateWalMode,
-            onLiquidityFilterChange = viewModel::updateLiquidityFilter,
-            onMinVolumeChange = viewModel::updateMinVolume,
-            onMinFdvChange = viewModel::updateMinFdv,
-            onMaxAtlChange = viewModel::updateMaxAtlChange,
-            onHeliusApiKeyChange = viewModel::updateHeliusApiKey,
-            onBirdeyeApiKeyChange = viewModel::updateBirdeyeApiKey,
-            onCryptoRankApiKeyChange = viewModel::updateCryptoRankApiKey,
-            onForceScan = viewModel::forceScan
-        )
-        
-        TokenList(tokens = tokens, modifier = Modifier.weight(1f))
-        
-        DebugLogList(logs = debugLogs)
+    NavHost(navController = navController, startDestination = "dashboard") {
+        composable("dashboard") {
+            Column(modifier = Modifier.fillMaxSize()) {
+                FilterPanel(
+                    state = settingsState,
+                    onWalModeChange = viewModel::updateWalMode,
+                    onLiquidityFilterChange = viewModel::updateLiquidityFilter,
+                    onMinFdvChange = viewModel::updateMinFdv,
+                    onTimeSelectionChange = viewModel::updateTimeSelection,
+                    onMinVolumeChange = viewModel::updateMinVolume,
+                    onMinTxnsChange = viewModel::updateMinTxns,
+                    onMinTradersChange = viewModel::updateMinTraders,
+                    onMaxAgeHoursChange = viewModel::updateMaxAgeHours,
+                    onMaxAtlChange = viewModel::updateMaxAtlChange,
+                    onForceScan = viewModel::forceScan,
+                    onNavigateSettings = { navController.navigate("settings") }
+                )
+                
+                TokenList(tokens = tokens, modifier = Modifier.weight(1f))
+                
+                DebugLogList(logs = debugLogs)
+            }
+        }
+        composable("settings") {
+            SettingsScreen(
+                state = settingsState,
+                onHeliusApiKeyChange = viewModel::updateHeliusApiKey,
+                onBirdeyeApiKeyChange = viewModel::updateBirdeyeApiKey,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
     }
 }

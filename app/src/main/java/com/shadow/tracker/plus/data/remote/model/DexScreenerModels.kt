@@ -28,10 +28,14 @@ data class DexScreenerLiquidity(
 )
 
 data class DexScreenerVolume(
+    @SerializedName("h1") val h1: Double?,
+    @SerializedName("h6") val h6: Double?,
     @SerializedName("h24") val h24: Double?
 )
 
 data class DexScreenerTxns(
+    @SerializedName("h1") val h1: DexScreenerTxnData?,
+    @SerializedName("h6") val h6: DexScreenerTxnData?,
     @SerializedName("h24") val h24: DexScreenerTxnData?
 )
 

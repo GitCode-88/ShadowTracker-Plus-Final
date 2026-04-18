@@ -20,12 +20,16 @@ import kotlinx.coroutines.launch
 data class ShadowSettingsState(
     val isWalModeEnabled: Boolean = true,
     val liquidityFilterUsd: Float = 2000f,
-    val minVolume24hUsd: Float = 0f,
     val minFdvUsd: Float = 0f,
+    val timeSelection: String = "24H", // 1H, 6H, 24H
+    val minVolumeUsd: Float = 0f,
+    val minTxns: Float = 0f,
+    val minTraders: Float = 0f,
+    val maxAgeHours: Float = 720f, // Up to 30 days default
     val maxPriceChangeFromAtl: Float = 500f, // in percentage
     val heliusApiKey: String = "",
     val birdeyeApiKey: String = "",
-    val cryptoRankApiKey: String = "",
+    val cryptoRankApiKey: String = "", // Kept for compatibility/settings layout
     val isScanning: Boolean = false
 )
 
@@ -49,6 +53,17 @@ class ShadowViewModel(
         }
     }
 
+    // Extract key helper
+    private fun extractKey(input: String): String {
+        return if (input.contains("api-key=")) {
+            input.substringAfterLast("api-key=")
+        } else if (input.contains("/")) {
+            input.substringAfterLast("/")
+        } else {
+            input
+        }
+    }
+
     // Derived state: Filter tokens from the database based on all filters
     val filteredTokens: StateFlow<List<TokenEntity>> = combine(
         tokenDao.getAllTokens(),
@@ -56,12 +71,27 @@ class ShadowViewModel(
     ) { tokens, settings ->
         tokens.filter { token ->
             // Hard safety filter first
-            if (!token.isSafe) return@filter false
+            if (!token.isSafe || token.isMutable) return@filter false
             
             val passesLiquidity = token.liquidityUsd >= settings.liquidityFilterUsd
-            val passesVolume = token.volume24hUsd >= settings.minVolume24hUsd
             val passesFdv = token.marketCapUsd >= settings.minFdvUsd
-            
+            val passesTraders = token.traders24h >= settings.minTraders
+
+            // Handle time selection based filtering for volume and txns
+            val (vol, txns) = when (settings.timeSelection) {
+                "1H" -> token.volume1hUsd to token.txns1h
+                "6H" -> token.volume6hUsd to token.txns6h
+                else -> token.volume24hUsd to token.txns24h
+            }
+            val passesVolume = vol >= settings.minVolumeUsd
+            val passesTxns = txns >= settings.minTxns
+
+            // Age Check
+            val ageMs = System.currentTimeMillis() - token.pairCreatedAt
+            val ageHours = ageMs / (1000 * 60 * 60).toFloat()
+            val passesAge = ageHours <= settings.maxAgeHours
+
+            // ATL Check
             val priceChangePercent = if (token.atlUsd > 0) {
                 ((token.priceUsd - token.atlUsd) / token.atlUsd) * 100.0
             } else {
@@ -69,7 +99,7 @@ class ShadowViewModel(
             }
             val passesAtlChange = priceChangePercent <= settings.maxPriceChangeFromAtl
             
-            passesLiquidity && passesVolume && passesFdv && passesAtlChange
+            passesLiquidity && passesVolume && passesFdv && passesTxns && passesTraders && passesAge && passesAtlChange
         }
     }.stateIn(
         scope = viewModelScope,
@@ -135,78 +165,117 @@ class ShadowViewModel(
     }
 
     private suspend fun workerHeliusScan() {
-        val heliusKey = _settingsState.value.heliusApiKey
-        if (heliusKey.isBlank()) {
-            logDebug("Worker A (Helius): Key missing, skipping.")
+        val heliusRaw = _settingsState.value.heliusApiKey
+        val birdeyeRaw = _settingsState.value.birdeyeApiKey
+        
+        val heliusKey = extractKey(heliusRaw)
+        val birdeyeKey = extractKey(birdeyeRaw)
+
+        if (heliusKey.isBlank() && birdeyeKey.isBlank()) {
+            logDebug("Worker A (Discovery): Keys missing, skipping.")
             return
         }
 
-        try {
-            logDebug("Worker A (Helius): Scanning new mints...")
-            // Specifically using searchAssets from the Helius DAS API via JSON-RPC
-            val params = mapOf("limit" to 10, "displayOptions" to mapOf("showFungible" to true))
-            val requestBody = HeliusRpcRequest(
-                method = "searchAssets",
-                params = params
-            )
-            
-            val response = ApiProvider.heliusApi.searchAssets(heliusKey, requestBody)
-            val tokens = response.result?.items ?: emptyList()
-            logDebug("Worker A (Helius): OK. Found \${tokens.size} tokens.")
+        logDebug("Worker A (Discovery): Scanning new mints...")
+        var foundTokens = false
 
-            for (item in tokens) {
-                val mintAddress = item.id ?: continue
-                val existingToken = tokenDao.getToken(mintAddress)
+        // Try Helius first
+        if (heliusKey.isNotBlank()) {
+            try {
+                val params = mapOf("limit" to 20, "displayOptions" to mapOf("showFungible" to true))
+                val requestBody = HeliusRpcRequest(
+                    method = "searchAssets",
+                    params = params
+                )
+                val response = ApiProvider.heliusApi.searchAssets(heliusKey, requestBody)
+                val tokens = response.result?.items ?: emptyList()
                 
-                // Only insert if it doesn't exist to prevent overwriting Birdeye/CryptoRank data
-                if (existingToken == null) {
-                    val symbol = item.content?.metadata?.symbol ?: "UNKNOWN"
-                    val name = item.content?.metadata?.name ?: "Unknown Token"
-                    val isMutable = item.mutable ?: false
-                    
-                    val newToken = TokenEntity(
+                for (item in tokens) {
+                    val mintAddress = item.id ?: continue
+                    insertNewToken(
                         mintAddress = mintAddress,
-                        name = name,
-                        symbol = symbol,
-                        liquidityUsd = 0.0,
-                        priceUsd = 0.0,
-                        marketCapUsd = 0.0,
-                        volume24hUsd = 0.0,
-                        txns24h = 0,
-                        pairCreatedAt = 0L,
-                        atlUsd = 0.0,
-                        athUsd = 0.0,
-                        atlLastUpdated = 0L,
-                        isSafe = true,
-                        isMutable = isMutable,
-                        riskScore = 0
+                        symbol = item.content?.metadata?.symbol ?: "UNKNOWN",
+                        name = item.content?.metadata?.name ?: "Unknown",
+                        isMutable = item.mutable ?: false
                     )
-                    tokenDao.insertToken(newToken)
-                    logDebug("Worker A (Helius): Inserted new token \$symbol.")
                 }
+                foundTokens = true
+                logDebug("Worker A (Helius): OK. \${tokens.size} tokens.")
+            } catch (e: Exception) {
+                Log.e("ShadowViewModel", "Helius Error: \${e.message}")
+                logDebug("Worker A (Helius) Error: \${e.message?.take(20)}")
             }
-        } catch (e: Exception) {
-            Log.e("ShadowViewModel", "Worker A (Helius) Error: \${e.message}")
-            logDebug("Worker A (Helius): Error \${e.message?.take(20)}...")
+        }
+
+        // Fallback to Birdeye Token List if Helius failed or wasn't provided
+        if (!foundTokens && birdeyeKey.isNotBlank()) {
+            try {
+                logDebug("Worker A (Birdeye Fallback): Fetching...")
+                val response = ApiProvider.birdeyeApi.getTokenList(apiKey = birdeyeKey)
+                val tokens = response.data?.tokens ?: emptyList()
+                
+                for (item in tokens) {
+                    val mintAddress = item.address ?: continue
+                    insertNewToken(
+                        mintAddress = mintAddress,
+                        symbol = item.symbol ?: "UNKNOWN",
+                        name = item.name ?: "Unknown",
+                        isMutable = true // Assume mutable if unknown from Birdeye
+                    )
+                }
+                logDebug("Worker A (Birdeye): OK. \${tokens.size} tokens.")
+            } catch (e: Exception) {
+                Log.e("ShadowViewModel", "Birdeye Discovery Error: \${e.message}")
+                logDebug("Worker A (Birdeye) Error: \${e.message?.take(20)}")
+            }
+        }
+    }
+
+    private suspend fun insertNewToken(mintAddress: String, symbol: String, name: String, isMutable: Boolean) {
+        val existingToken = tokenDao.getToken(mintAddress)
+        if (existingToken == null) {
+            val newToken = TokenEntity(
+                mintAddress = mintAddress,
+                name = name,
+                symbol = symbol,
+                liquidityUsd = 0.0,
+                priceUsd = 0.0,
+                marketCapUsd = 0.0,
+                volume1hUsd = 0.0,
+                volume6hUsd = 0.0,
+                volume24hUsd = 0.0,
+                txns1h = 0,
+                txns6h = 0,
+                txns24h = 0,
+                traders24h = 0,
+                pairCreatedAt = System.currentTimeMillis(),
+                atlUsd = 0.0,
+                athUsd = 0.0,
+                atlLastUpdated = 0L,
+                isSafe = true,
+                isMutable = isMutable,
+                riskScore = 0
+            )
+            tokenDao.insertToken(newToken)
         }
     }
 
     private suspend fun workerDexScreenerScan() {
+        val birdeyeKey = extractKey(_settingsState.value.birdeyeApiKey)
+
         try {
             val tokensFlow = tokenDao.getAllTokens()
             var currentTokens: List<TokenEntity> = emptyList()
             val job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 tokensFlow.collect { currentTokens = it }
             }
-            delay(100) // Wait for snapshot
+            delay(100)
             job.cancel()
             
             if (currentTokens.isEmpty()) return
             
-            // DexScreener allows up to 30 addresses per request separated by commas
             val chunks = currentTokens.chunked(30)
-            
-            logDebug("Worker B (DexScreener): Updating \${currentTokens.size} tokens...")
+            logDebug("Worker B (Market Data): Updating \${currentTokens.size} tokens...")
 
             for (chunk in chunks) {
                 val addresses = chunk.joinToString(",") { it.mintAddress }
@@ -214,43 +283,65 @@ class ShadowViewModel(
                     val response = ApiProvider.dexScreenerApi.getTokens(addresses)
                     val pairs = response.pairs ?: emptyList()
                     
-                    // Update tokens with the best pair (usually the first one returned for that token)
                     for (token in chunk) {
                         val bestPair = pairs.firstOrNull { it.baseToken?.address == token.mintAddress }
                         if (bestPair != null) {
                             val liq = bestPair.liquidity?.usd ?: 0.0
                             val priceStr = bestPair.priceUsd ?: "0"
                             val price = priceStr.toDoubleOrNull() ?: 0.0
-                            val vol = bestPair.volume?.h24 ?: 0.0
-                            val txns = (bestPair.txns?.h24?.buys ?: 0) + (bestPair.txns?.h24?.sells ?: 0)
-                            val fdv = bestPair.fdv ?: 0.0
-                            val createdAt = bestPair.pairCreatedAt ?: 0L
                             
-                            // Emulate ATL behavior using price history or initial price tracking
-                            // For simplicity, if atlUsd is 0, we set it to current price as initial baseline
+                            val vol1h = bestPair.volume?.h1 ?: 0.0
+                            val vol6h = bestPair.volume?.h6 ?: 0.0
+                            val vol24h = bestPair.volume?.h24 ?: 0.0
+                            
+                            val txns1h = (bestPair.txns?.h1?.buys ?: 0) + (bestPair.txns?.h1?.sells ?: 0)
+                            val txns6h = (bestPair.txns?.h6?.buys ?: 0) + (bestPair.txns?.h6?.sells ?: 0)
+                            val txns24h = (bestPair.txns?.h24?.buys ?: 0) + (bestPair.txns?.h24?.sells ?: 0)
+                            
+                            val fdv = bestPair.fdv ?: 0.0
+                            val createdAt = bestPair.pairCreatedAt ?: token.pairCreatedAt
+                            
                             val atl = if (token.atlUsd == 0.0 && price > 0.0) price else token.atlUsd
+                            val ath = if (price > token.athUsd) price else token.athUsd
+
+                            // Optional: Fetch Traders from Birdeye if Key is present
+                            var traders24h = token.traders24h
+                            if (birdeyeKey.isNotBlank()) {
+                                try {
+                                    val beResponse = ApiProvider.birdeyeApi.getTokenOverview(birdeyeKey, token.mintAddress)
+                                    traders24h = beResponse.data?.uniqueWallet24h ?: token.traders24h
+                                } catch (e: Exception) {
+                                    // Silently ignore individual birdeye fails to not spam log
+                                }
+                            }
                             
                             val updatedToken = token.copy(
                                 liquidityUsd = liq,
                                 priceUsd = price,
-                                volume24hUsd = vol,
+                                volume1hUsd = vol1h,
+                                volume6hUsd = vol6h,
+                                volume24hUsd = vol24h,
                                 marketCapUsd = fdv,
-                                txns24h = txns,
+                                txns1h = txns1h,
+                                txns6h = txns6h,
+                                txns24h = txns24h,
+                                traders24h = traders24h,
                                 pairCreatedAt = createdAt,
-                                atlUsd = atl
+                                atlUsd = atl,
+                                athUsd = ath
                             )
                             tokenDao.insertToken(updatedToken)
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e("ShadowViewModel", "Worker B (DexScreener) chunk failed: \${e.message}")
-                    logDebug("Worker B (DexScreener): Error fetching chunk")
+                    Log.e("ShadowViewModel", "Worker B (Market) chunk failed: \${e.message}")
+                    logDebug("Worker B (Market): Error fetching chunk")
                 }
             }
-            logDebug("Worker B (DexScreener): OK.")
+            logDebug("Worker B (Market): OK.")
         } catch (e: Exception) {
-            Log.e("ShadowViewModel", "Worker B (DexScreener) Error: \${e.message}")
-            logDebug("Worker B (DexScreener): Global Error \${e.message?.take(20)}...")
+            Log.e("ShadowViewModel", "Worker B (Market) Error: \${e.message}")
+            logDebug("Worker B (Market): Global Error \${e.message?.take(20)}")
         }
     }
 
@@ -311,13 +402,25 @@ class ShadowViewModel(
         _settingsState.update { it.copy(liquidityFilterUsd = value) }
     }
     fun updateMinVolume(value: Float) {
-        _settingsState.update { it.copy(minVolume24hUsd = value) }
+        _settingsState.update { it.copy(minVolumeUsd = value) }
+    }
+    fun updateMinTxns(value: Float) {
+        _settingsState.update { it.copy(minTxns = value) }
+    }
+    fun updateMinTraders(value: Float) {
+        _settingsState.update { it.copy(minTraders = value) }
+    }
+    fun updateMaxAgeHours(value: Float) {
+        _settingsState.update { it.copy(maxAgeHours = value) }
     }
     fun updateMinFdv(value: Float) {
         _settingsState.update { it.copy(minFdvUsd = value) }
     }
     fun updateMaxAtlChange(value: Float) {
         _settingsState.update { it.copy(maxPriceChangeFromAtl = value) }
+    }
+    fun updateTimeSelection(selection: String) {
+        _settingsState.update { it.copy(timeSelection = selection) }
     }
     fun updateHeliusApiKey(key: String) {
         _settingsState.update { it.copy(heliusApiKey = key) }
