@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shadow.tracker.plus.ui.theme.MatrixDarkGray
 import com.shadow.tracker.plus.ui.theme.MatrixNeonGreen
+import com.shadow.tracker.plus.ui.theme.MatrixRed
 import com.shadow.tracker.plus.ui.viewmodel.ShadowSettingsState
 import kotlin.math.roundToInt
 
@@ -69,7 +70,17 @@ fun FilterPanel(
                     modifier = Modifier.clickable { expanded = !expanded }
                 )
                 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (state.pipelineError != null) {
+                        Text(
+                            text = "⚠️ Error: ${state.pipelineError}",
+                            color = MatrixRed,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings", tint = Color.Gray)
                     }

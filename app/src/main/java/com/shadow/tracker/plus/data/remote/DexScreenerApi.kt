@@ -8,8 +8,8 @@ interface DexScreenerApi {
     @GET("token-profiles/latest/v1")
     suspend fun getLatestTokenProfiles(): List<DexScreenerTokenProfile>
     
-    @GET("latest/dex/search?q={query}")
-    suspend fun searchPairs(@retrofit2.http.Path("query") query: String): DexScreenerResponse
+    @GET("latest/dex/search")
+    suspend fun searchPairs(@retrofit2.http.Query("q") query: String): DexScreenerResponse
 
     @GET("latest/dex/tokens/{tokenAddresses}")
     suspend fun getTokens(

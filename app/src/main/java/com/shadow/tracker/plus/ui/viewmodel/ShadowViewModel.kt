@@ -28,7 +28,8 @@ data class ShadowSettingsState(
     val maxPriceChangeFromAtl: Float = 500f, // in percentage (+% from bottom)
     val isScanning: Boolean = false,
     val heliusApiKey: String = "",
-    val birdeyeApiKey: String = ""
+    val birdeyeApiKey: String = "",
+    val pipelineError: String? = null
 )
 
 class ShadowViewModel(
@@ -109,7 +110,7 @@ class ShadowViewModel(
 
     fun startScanning() {
         if (_settingsState.value.isScanning) return
-        _settingsState.update { it.copy(isScanning = true) }
+        _settingsState.update { it.copy(isScanning = true, pipelineError = null) }
         logDebug("Initializing Phönix-Matrix...")
         
         scanJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -225,7 +226,9 @@ class ShadowViewModel(
                 kotlinx.coroutines.delay(250) // Be gentle to DexScreener rate limits
             }
         } catch (e: Exception) {
-            logDebug("Ingestion Error: ${e.message?.take(30)}")
+            val errMsg = "Ingestion Error: ${e.message?.take(50)}"
+            logDebug(errMsg)
+            _settingsState.update { it.copy(pipelineError = errMsg) }
         }
     }
     
